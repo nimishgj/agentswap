@@ -80,21 +80,6 @@ fn run_event_loop(
                 app.should_quit = true;
             }
 
-            // Preview scroll: Ctrl+D / Ctrl+U
-            if app.preview_open && app.screen == Screen::ConversationList {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    match key.code {
-                        KeyCode::Char('d') => {
-                            app.preview_scroll = app.preview_scroll.saturating_add(10);
-                        }
-                        KeyCode::Char('u') => {
-                            app.preview_scroll = app.preview_scroll.saturating_sub(10);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
             // If in search mode, handle search-specific keys first.
             if app.searching {
                 match key.code {
@@ -131,15 +116,17 @@ fn run_event_loop(
                         }
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        app.move_down();
                         if app.preview_open && app.screen == Screen::ConversationList {
-                            load_preview(app, adapters);
+                            app.preview_scroll = app.preview_scroll.saturating_add(1);
+                        } else {
+                            app.move_down();
                         }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        app.move_up();
                         if app.preview_open && app.screen == Screen::ConversationList {
-                            load_preview(app, adapters);
+                            app.preview_scroll = app.preview_scroll.saturating_sub(1);
+                        } else {
+                            app.move_up();
                         }
                     }
                     KeyCode::Enter => {

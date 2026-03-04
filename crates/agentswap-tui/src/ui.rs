@@ -3,7 +3,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Wrap,
+    },
     Frame,
 };
 
@@ -216,6 +219,7 @@ fn draw_conversation_list(f: &mut Frame, app: &App) {
             })
             .collect();
 
+        let total_lines = preview_lines.len();
         let preview = Paragraph::new(preview_lines)
             .block(
                 Block::default()
@@ -226,10 +230,18 @@ fn draw_conversation_list(f: &mut Frame, app: &App) {
             .wrap(Wrap { trim: false })
             .scroll((app.preview_scroll, 0));
         f.render_widget(preview, preview_rect);
+
+        // Scrollbar
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(app.preview_scroll as usize);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None);
+        f.render_stateful_widget(scrollbar, preview_rect, &mut scrollbar_state);
     }
 
     let footer_hint = if app.preview_open {
-        "[Enter] Select  [/] Search  [Tab] Close preview  [Ctrl+D/U] Scroll  [Esc] Back"
+        "[j/k] Scroll  [Tab] Close preview  [Esc] Back"
     } else {
         "[Enter] Select  [/] Search  [Tab] Preview  [Esc] Back"
     };
