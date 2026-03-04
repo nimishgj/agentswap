@@ -1,1 +1,6 @@
-// agentswap-codex: OpenAI Codex conversation adapter
+// agentswap-codex: OpenAI Codex CLI conversation adapter
+
+pub mod adapter;
+pub mod parser;
+
+pub use adapter::CodexAdapter;
