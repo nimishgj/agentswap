@@ -80,6 +80,11 @@ fn run_event_loop(
                 app.should_quit = true;
             }
 
+            // Clear pending_g on any key that isn't 'g'
+            if app.pending_g && key.code != KeyCode::Char('g') && key.code != KeyCode::Char('G') {
+                app.pending_g = false;
+            }
+
             // If in search mode, handle search-specific keys first.
             if app.searching {
                 match key.code {
@@ -139,6 +144,28 @@ fn run_event_loop(
                         if app.screen == Screen::ConversationList {
                             app.searching = true;
                             app.search_query.clear();
+                        }
+                    }
+                    KeyCode::Char('G') => {
+                        app.pending_g = false;
+                        if app.preview_open && app.screen == Screen::ConversationList {
+                            let total = app.preview_text.lines().count() as u16;
+                            app.preview_scroll = total.saturating_sub(1);
+                        } else {
+                            app.move_to_bottom();
+                        }
+                    }
+                    KeyCode::Char('g') => {
+                        if app.pending_g {
+                            // gg = go to top
+                            app.pending_g = false;
+                            if app.preview_open && app.screen == Screen::ConversationList {
+                                app.preview_scroll = 0;
+                            } else {
+                                app.move_to_top();
+                            }
+                        } else {
+                            app.pending_g = true;
                         }
                     }
                     KeyCode::Tab => {

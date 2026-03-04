@@ -57,6 +57,8 @@ pub struct App {
     pub preview_text: String,
     /// Scroll offset for the preview panel.
     pub preview_scroll: u16,
+    /// Whether 'g' was pressed, waiting for a second 'g' (vim gg).
+    pub pending_g: bool,
 }
 
 impl App {
@@ -78,6 +80,7 @@ impl App {
             preview_open: false,
             preview_text: String::new(),
             preview_scroll: 0,
+            pending_g: false,
         }
     }
 
@@ -122,6 +125,40 @@ impl App {
                 let targets = self.available_targets();
                 if !targets.is_empty() && self.target_agent_idx < targets.len() - 1 {
                     self.target_agent_idx += 1;
+                }
+            }
+            Screen::TransferResult => {}
+        }
+    }
+
+    /// Move selection to the top of the current list.
+    pub fn move_to_top(&mut self) {
+        match self.screen {
+            Screen::AgentOverview => self.selected_agent_idx = 0,
+            Screen::ConversationList => self.selected_conv_idx = 0,
+            Screen::Transfer => self.target_agent_idx = 0,
+            Screen::TransferResult => {}
+        }
+    }
+
+    /// Move selection to the bottom of the current list.
+    pub fn move_to_bottom(&mut self) {
+        match self.screen {
+            Screen::AgentOverview => {
+                if !self.agents.is_empty() {
+                    self.selected_agent_idx = self.agents.len() - 1;
+                }
+            }
+            Screen::ConversationList => {
+                let count = self.filtered_conversations().len();
+                if count > 0 {
+                    self.selected_conv_idx = count - 1;
+                }
+            }
+            Screen::Transfer => {
+                let targets = self.available_targets();
+                if !targets.is_empty() {
+                    self.target_agent_idx = targets.len() - 1;
                 }
             }
             Screen::TransferResult => {}
