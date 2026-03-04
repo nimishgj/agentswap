@@ -11,6 +11,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use agentswap_core::adapter::AgentAdapter;
+use agentswap_core::tool_mapping::map_tool;
 use agentswap_core::types::*;
 
 use crate::parser::*;
@@ -439,9 +440,10 @@ impl AgentAdapter for GeminiAdapter {
                     }));
                 }
                 Role::Assistant => {
-                    // Build tool calls array
+                    // Build tool calls array (with tool name mapping)
                     let mut tool_calls: Vec<Value> = Vec::new();
                     for tc in &msg.tool_calls {
+                        let mapped = map_tool(&conv.source_agent, &AgentKind::Gemini, &tc.name, &tc.input);
                         let tc_id = Uuid::new_v4().to_string();
                         let status = match tc.status {
                             ToolStatus::Success => "success",
@@ -458,7 +460,7 @@ impl AgentAdapter for GeminiAdapter {
                             result.push(json!({
                                 "functionResponse": {
                                     "id": tc_id,
-                                    "name": tc.name,
+                                    "name": mapped.name,
                                     "response": { response_key: output }
                                 }
                             }));
@@ -466,8 +468,8 @@ impl AgentAdapter for GeminiAdapter {
 
                         tool_calls.push(json!({
                             "id": tc_id,
-                            "name": tc.name,
-                            "args": tc.input,
+                            "name": mapped.name,
+                            "args": mapped.input,
                             "result": result,
                             "status": status
                         }));

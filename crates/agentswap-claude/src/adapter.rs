@@ -10,6 +10,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use agentswap_core::adapter::AgentAdapter;
+use agentswap_core::tool_mapping::map_tool;
 use agentswap_core::types::*;
 
 use crate::parser::*;
@@ -661,15 +662,16 @@ impl AgentAdapter for ClaudeAdapter {
                         }));
                     }
 
-                    // Add tool_use blocks
+                    // Add tool_use blocks (with tool name mapping)
                     let mut tool_result_events: Vec<(String, Value)> = Vec::new();
                     for tc in &msg.tool_calls {
+                        let mapped = map_tool(&conv.source_agent, &AgentKind::Claude, &tc.name, &tc.input);
                         let tool_use_id = format!("toolu_{}", Uuid::new_v4().to_string().replace('-', ""));
                         content_blocks.push(json!({
                             "type": "tool_use",
                             "id": tool_use_id,
-                            "name": tc.name,
-                            "input": tc.input
+                            "name": mapped.name,
+                            "input": mapped.input
                         }));
 
                         // Prepare corresponding tool_result event (emitted as a user event)

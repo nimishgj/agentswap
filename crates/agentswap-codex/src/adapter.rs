@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use agentswap_core::adapter::AgentAdapter;
+use agentswap_core::tool_mapping::map_tool;
 use agentswap_core::types::*;
 
 use crate::parser::*;
@@ -609,14 +610,15 @@ impl AgentAdapter for CodexAdapter {
 
                     // Emit tool calls as function_call + function_call_output pairs
                     for tc in &msg.tool_calls {
+                        let mapped = map_tool(&conv.source_agent, &AgentKind::Codex, &tc.name, &tc.input);
                         let call_id = format!("call_{}", Uuid::new_v4().to_string().replace('-', ""));
 
                         // Determine if this is a "custom_tool_call" (like apply_patch)
                         // or a regular "function_call"
-                        let is_custom = tc.input.is_string();
+                        let is_custom = mapped.input.is_string();
 
                         if is_custom {
-                            let input_text = tc.input.as_str().unwrap_or("").to_string();
+                            let input_text = mapped.input.as_str().unwrap_or("").to_string();
                             let function_call = json!({
                                 "timestamp": ts,
                                 "type": "response_item",
@@ -624,7 +626,7 @@ impl AgentAdapter for CodexAdapter {
                                     "type": "custom_tool_call",
                                     "status": "completed",
                                     "call_id": call_id,
-                                    "name": tc.name,
+                                    "name": mapped.name,
                                     "input": input_text
                                 }
                             });
@@ -643,13 +645,13 @@ impl AgentAdapter for CodexAdapter {
                             writeln!(file, "{}", serde_json::to_string(&call_output)?)?;
                         } else {
                             // Regular function_call: arguments is JSON-encoded string
-                            let arguments = serde_json::to_string(&tc.input)?;
+                            let arguments = serde_json::to_string(&mapped.input)?;
                             let function_call = json!({
                                 "timestamp": ts,
                                 "type": "response_item",
                                 "payload": {
                                     "type": "function_call",
-                                    "name": tc.name,
+                                    "name": mapped.name,
                                     "arguments": arguments,
                                     "call_id": call_id
                                 }
