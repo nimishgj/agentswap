@@ -2,6 +2,8 @@
 
 Transfer conversation history between AI coding agents seamlessly.
 
+<img src="./demo.gif" />
+
 ## The Problem
 
 You're 50 messages deep into a debugging session with Claude Code and you want to try Gemini CLI's approach. What are your options?
