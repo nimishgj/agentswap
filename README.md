@@ -30,11 +30,11 @@ That's how AgentSwap started. But it turns out this isn't just a "ran out of tok
 
 ## Supported Agents
 
-| Agent | Read | Write | Resume |
-|-------|------|-------|--------|
-| Claude Code | Yes | Yes | `claude --resume <id>` |
-| Gemini CLI | Yes | Yes | `gemini --resume <id>` |
-| Codex CLI | Yes | Yes | `codex --resume <id>` |
+| Agent | Version Tested | Read | Write | Resume |
+|-------|---------------|------|-------|--------|
+| Claude Code | 2.1.68 | Yes | Yes | `claude --resume <id>` |
+| Gemini CLI | 0.27.3 | Yes | Yes | `gemini --resume <id>` |
+| Codex CLI | 0.106.0 | Yes | Yes | `codex --resume <id>` |
 
 ## Features
 
