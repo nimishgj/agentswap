@@ -61,7 +61,7 @@ fn test_claude_to_gemini_roundtrip() {
     let claude_tmp = TempDir::new().unwrap();
     let gemini_tmp = TempDir::new().unwrap();
 
-    let claude = ClaudeAdapter::with_projects_dir(claude_tmp.path().to_path_buf());
+    let _claude = ClaudeAdapter::with_projects_dir(claude_tmp.path().to_path_buf());
     let gemini = GeminiAdapter::with_tmp_dir(gemini_tmp.path().to_path_buf());
 
     let conv = sample_conversation();

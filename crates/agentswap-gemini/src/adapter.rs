@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -384,16 +385,14 @@ impl AgentAdapter for GeminiAdapter {
         let session_id = Uuid::new_v4().to_string();
 
         // Derive project hash from project_dir.
-        // If it already has "gemini:" prefix, strip it; otherwise generate a hash-like string.
+        // If it already has "gemini:" prefix, strip it (it's already a hash).
+        // Otherwise compute SHA-256 of the path, matching Gemini CLI's algorithm.
         let project_hash = if let Some(stripped) = conv.project_dir.strip_prefix("gemini:") {
             stripped.to_string()
         } else {
-            // Generate a deterministic hash from the project path
-            // Use a simple hash: take the path and create an 8-char hex string
-            let hash_value = conv.project_dir.bytes().fold(0u64, |acc, b| {
-                acc.wrapping_mul(31).wrapping_add(b as u64)
-            });
-            format!("{:016x}", hash_value)
+            let mut hasher = Sha256::new();
+            hasher.update(conv.project_dir.as_bytes());
+            hex::encode(hasher.finalize())
         };
 
         // Create the chats directory

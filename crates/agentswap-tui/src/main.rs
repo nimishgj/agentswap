@@ -109,6 +109,12 @@ fn run_event_loop(
                     KeyCode::Char('q') => {
                         app.should_quit = true;
                     }
+                    KeyCode::Char('c') if app.screen == Screen::TransferResult => {
+                        if let Some(cmd) = &app.resume_command {
+                            copy_to_clipboard(cmd);
+                            app.status_message = Some("Copied to clipboard!".to_string());
+                        }
+                    }
                     KeyCode::Char('j') | KeyCode::Down => {
                         app.move_down();
                     }
@@ -195,6 +201,7 @@ fn handle_enter(
             let target_idx = app.target_agent_idx.min(targets.len().saturating_sub(1));
             let target_agent_idx = targets[target_idx];
             let target_name = app.agents[target_agent_idx].name.clone();
+            let target_kind = app.agents[target_agent_idx].kind.clone();
             let source_idx = app.selected_agent_idx;
 
             // Get the selected conversation ID.
@@ -231,8 +238,6 @@ fn handle_enter(
                         }
                     };
 
-                    let target_kind = app.agents[target_agent_idx].kind.clone();
-
                     match execute_stdin_transfer(&prompt, &target_kind, terminal) {
                         Ok(()) => {
                             app.status_message = Some(format!(
@@ -250,10 +255,10 @@ fn handle_enter(
                     // Try native write via the target adapter.
                     match adapters[target_agent_idx].write_conversation(&conversation) {
                         Ok(new_id) => {
-                            app.status_message = Some(format!(
-                                "Transferred to {} (id: {})",
-                                target_name, new_id
-                            ));
+                            let resume_cmd = build_resume_command(&target_kind, &new_id);
+                            app.resume_command = Some(resume_cmd);
+                            app.status_message = None;
+                            app.screen = Screen::TransferResult;
                         }
                         Err(e) => {
                             app.status_message =
@@ -262,6 +267,12 @@ fn handle_enter(
                     }
                 }
             }
+        }
+        Screen::TransferResult => {
+            // Enter goes back to agent overview
+            app.screen = Screen::AgentOverview;
+            app.resume_command = None;
+            app.status_message = None;
         }
     }
 }
@@ -325,5 +336,46 @@ fn handle_esc(app: &mut App) {
             app.screen = Screen::ConversationList;
             app.status_message = None;
         }
+        Screen::TransferResult => {
+            app.screen = Screen::AgentOverview;
+            app.resume_command = None;
+            app.status_message = None;
+        }
+    }
+}
+
+/// Build the CLI resume command for a given agent and session ID.
+fn build_resume_command(target_kind: &AgentKind, session_id: &str) -> String {
+    match target_kind {
+        AgentKind::Claude => format!("claude --resume {}", session_id),
+        AgentKind::Codex => format!("codex resume {}", session_id),
+        AgentKind::Gemini => format!("gemini --resume {}", session_id),
+    }
+}
+
+/// Copy text to the system clipboard using platform-native commands.
+fn copy_to_clipboard(text: &str) {
+    // Try pbcopy (macOS), then xclip (Linux), then xsel (Linux)
+    let result = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .or_else(|_| {
+            Command::new("xclip")
+                .args(["-selection", "clipboard"])
+                .stdin(Stdio::piped())
+                .spawn()
+        })
+        .or_else(|_| {
+            Command::new("xsel")
+                .arg("--clipboard")
+                .stdin(Stdio::piped())
+                .spawn()
+        });
+
+    if let Ok(mut child) = result {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
     }
 }

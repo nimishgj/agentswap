@@ -6,6 +6,7 @@ pub enum Screen {
     AgentOverview,
     ConversationList,
     Transfer,
+    TransferResult,
 }
 
 /// Summary information about a single agent, used for display in the TUI.
@@ -48,6 +49,8 @@ pub struct App {
     pub should_quit: bool,
     pub search_query: String,
     pub searching: bool,
+    /// The resume command to show after a successful transfer.
+    pub resume_command: Option<String>,
 }
 
 impl App {
@@ -65,6 +68,7 @@ impl App {
             should_quit: false,
             search_query: String::new(),
             searching: false,
+            resume_command: None,
         }
     }
 
@@ -87,6 +91,7 @@ impl App {
                     self.target_agent_idx -= 1;
                 }
             }
+            Screen::TransferResult => {}
         }
     }
 
@@ -110,6 +115,7 @@ impl App {
                     self.target_agent_idx += 1;
                 }
             }
+            Screen::TransferResult => {}
         }
     }
 

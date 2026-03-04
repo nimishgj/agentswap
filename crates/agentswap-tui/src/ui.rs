@@ -15,6 +15,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Screen::AgentOverview => draw_agent_overview(f, app),
         Screen::ConversationList => draw_conversation_list(f, app),
         Screen::Transfer => draw_transfer(f, app),
+        Screen::TransferResult => draw_transfer_result(f, app),
     }
 }
 
@@ -350,6 +351,63 @@ fn draw_transfer(f: &mut Frame, app: &App) {
     f.render_stateful_widget(method_list, lower_chunks[4], &mut method_state);
 
     draw_footer(f, chunks[1], app, "[Enter] Transfer  [Tab] Method  [Esc] Back");
+}
+
+// ---------------------------------------------------------------------------
+// Screen 4: Transfer Result
+// ---------------------------------------------------------------------------
+
+fn draw_transfer_result(f: &mut Frame, app: &App) {
+    let area = f.area();
+
+    let footer_lines: u16 = if app.status_message.is_some() { 2 } else { 1 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(footer_lines)])
+        .split(area);
+
+    let cmd = app
+        .resume_command
+        .as_deref()
+        .unwrap_or("(no command available)");
+
+    let content = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Transfer complete!",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Run this command to resume the conversation:",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("    {}", cmd),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    let paragraph = Paragraph::new(content).block(
+        Block::default()
+            .title(" Transfer Result ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green)),
+    );
+    f.render_widget(paragraph, chunks[0]);
+
+    draw_footer(
+        f,
+        chunks[1],
+        app,
+        "[c] Copy command  [Enter/Esc] Back",
+    );
 }
 
 // ---------------------------------------------------------------------------
