@@ -4,9 +4,29 @@ Transfer conversation history between AI coding agents seamlessly.
 
 ## The Problem
 
-You're mid-conversation with Claude Code, 50 messages deep into debugging a complex issue, and you want to try Gemini CLI's approach — but there's no way to bring your conversation context along. You'd have to start from scratch, re-explain the problem, and lose all the context you've built up.
+You're 50 messages deep into a debugging session with Claude Code and you want to try Gemini CLI's approach. What are your options?
 
-AgentSwap solves this. It reads conversations from one agent and writes them into another agent's native format, so you can pick up exactly where you left off.
+- **Copy-paste the conversation?** Good luck — a real session is easily 100,000+ lines with tool calls, file contents, and outputs. Most of it gets truncated or lost.
+- **Start from scratch?** You lose all the context, file changes, reasoning, and tool history that got you here.
+- **Export and summarize?** You lose the structured tool calls, the exact inputs/outputs, and the agent can't actually resume from a summary.
+
+The core issue: each agent stores conversations in its own format (Claude uses JSONL with UUID chains, Gemini uses JSON with SHA-256 project hashing, Codex uses SQLite + JSONL rollouts). There's no way to move between them.
+
+AgentSwap reads conversations from one agent's native storage, translates tool names and parameters, and writes them into another agent's native format — so `--resume` just works.
+
+## Story Behind Building This
+
+I was deep into a coding session on Codex's free plan — had a massive conversation going, tons of context built up — and then the tokens ran out. No more free credits. The conversation was right there on disk, but I couldn't continue it.
+
+"Fine, I'll just copy-paste it into Claude Code." I opened the conversation and... it was enormous. Hundreds of tool calls, file reads, outputs, reasoning blocks. Way too much to copy. And even if I could, half of it would be meaningless without the structured tool call format the other agent expects.
+
+So I sat there thinking — why isn't there a simple way to just move a conversation from one agent to another? They all store the data locally. Someone just needs to translate between the formats.
+
+That's how AgentSwap started. But it turns out this isn't just a "ran out of tokens" problem. It's useful anytime you want to:
+
+- **Switch agents mid-task** — maybe Claude is better at reasoning through your bug, but Gemini has the tool you need
+- **Survive outages** — if one agent's API is down, move your conversation to another and keep working
+- **Compare approaches** — hand the same conversation to a different agent and see how it picks up from there
 
 ## Supported Agents
 
@@ -68,29 +88,27 @@ cargo run -p agentswap-tui
 4. AgentSwap writes the conversation in the target's native format
 5. Press `c` to copy the resume command, then run it in your terminal
 
-## Architecture
+## How It Works
 
-AgentSwap is a Cargo workspace with 5 crates:
+Every agent stores conversations differently — Claude uses JSONL with UUID-chained events, Gemini uses JSON files keyed by SHA-256 project hashes, Codex uses SQLite alongside JSONL rollout files. Translating directly between every pair would be a nightmare.
+
+Instead, AgentSwap uses a **Universal Conversation Format (UCF)** as an intermediate representation. Every adapter only needs to know two things: how to read its agent's format into UCF, and how to write UCF back out.
 
 ```
-crates/
-  agentswap-core/     # Universal Conversation Format types, adapter trait, tool mapping
-  agentswap-claude/   # Claude Code adapter (JSONL)
-  agentswap-gemini/   # Gemini CLI adapter (JSON + SHA-256 project hashing)
-  agentswap-codex/    # Codex CLI adapter (SQLite + JSONL)
-  agentswap-tui/      # Terminal UI (ratatui)
+┌─────────────┐      ┌─────────────────────────┐      ┌─────────────┐
+│  Claude Code │      │  Universal Conversation  │      │  Claude Code │
+│   (JSONL)    │─────>│        Format (UCF)       │─────>│   (JSONL)    │
+├─────────────┤      │                           │      ├─────────────┤
+│  Gemini CLI  │─────>│  Messages, tool calls,    │─────>│  Gemini CLI  │
+│   (JSON)     │      │  metadata, file changes   │      │   (JSON)     │
+├─────────────┤      │                           │      ├─────────────┤
+│  Codex CLI   │─────>│  + tool name/param        │─────>│  Codex CLI   │
+│(SQLite+JSONL)│      │    mapping layer          │      │(SQLite+JSONL)│
+└─────────────┘      └─────────────────────────┘      └─────────────┘
+   read(id) ──>            Conversation              ──> write(conv)
 ```
 
-Each adapter implements the `AgentAdapter` trait:
-
-```rust
-pub trait AgentAdapter {
-    fn list_conversations(&self) -> Result<Vec<ConversationMeta>>;
-    fn read_conversation(&self, id: &str) -> Result<Conversation>;
-    fn write_conversation(&self, conversation: &Conversation) -> Result<String>;
-    fn render_prompt(&self, conversation: &Conversation) -> String;
-}
-```
+Tool names and parameters are also mapped automatically — Claude's `Bash` becomes Gemini's `run_shell_command`, input fields like `command` vs `cmd` are remapped, and tools that don't exist in the target agent pass through unchanged.
 
 ## Development
 
