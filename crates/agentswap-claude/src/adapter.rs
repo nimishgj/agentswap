@@ -566,16 +566,40 @@ impl AgentAdapter for ClaudeAdapter {
         let mut file = fs::File::create(&file_path)
             .with_context(|| format!("Failed to create session file: {}", file_path.display()))?;
 
-        // Collect pending tool calls from assistant messages to emit tool_use + tool_result pairs
+        // Track parentUuid for conversation tree chaining
+        let mut prev_uuid: Option<String> = None;
+
+        // Emit file-history-snapshot if there are file changes
+        if !conv.file_changes.is_empty() {
+            let mut backups = serde_json::Map::new();
+            for fc in &conv.file_changes {
+                backups.insert(
+                    fc.path.clone(),
+                    json!({
+                        "backupFileName": null,
+                        "version": 1,
+                        "backupTime": fc.timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                    }),
+                );
+            }
+            let snapshot_event = json!({
+                "type": "file-history-snapshot",
+                "snapshot": {
+                    "trackedFileBackups": backups,
+                    "timestamp": conv.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                }
+            });
+            writeln!(file, "{}", serde_json::to_string(&snapshot_event)?)?;
+        }
+
+        // Emit message events with parentUuid chaining
         for msg in &conv.messages {
             let ts = msg.timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let event_uuid = Uuid::new_v4().to_string();
 
             match msg.role {
                 Role::User | Role::System => {
-                    // Check if this message has any tool_calls that should be emitted as
-                    // tool_result blocks (unusual for user messages, but handle gracefully)
-                    let event = json!({
+                    let mut event = json!({
                         "type": "user",
                         "uuid": event_uuid,
                         "timestamp": ts,
@@ -586,7 +610,11 @@ impl AgentAdapter for ClaudeAdapter {
                             "content": msg.content.clone()
                         }
                     });
+                    if let Some(parent) = &prev_uuid {
+                        event.as_object_mut().unwrap().insert("parentUuid".to_string(), json!(parent));
+                    }
                     writeln!(file, "{}", serde_json::to_string(&event)?)?;
+                    prev_uuid = Some(event_uuid);
                 }
                 Role::Assistant => {
                     // Build content blocks for the assistant message
@@ -617,7 +645,7 @@ impl AgentAdapter for ClaudeAdapter {
                     }
 
                     // Add tool_use blocks
-                    let mut tool_result_events: Vec<Value> = Vec::new();
+                    let mut tool_result_events: Vec<(String, Value)> = Vec::new();
                     for tc in &msg.tool_calls {
                         let tool_use_id = format!("toolu_{}", Uuid::new_v4().to_string().replace('-', ""));
                         content_blocks.push(json!({
@@ -630,7 +658,7 @@ impl AgentAdapter for ClaudeAdapter {
                         // Prepare corresponding tool_result event (emitted as a user event)
                         let result_uuid = Uuid::new_v4().to_string();
                         let result_content = tc.output.as_deref().unwrap_or("");
-                        tool_result_events.push(json!({
+                        tool_result_events.push((result_uuid.clone(), json!({
                             "type": "user",
                             "uuid": result_uuid,
                             "timestamp": ts,
@@ -644,7 +672,7 @@ impl AgentAdapter for ClaudeAdapter {
                                     "content": result_content
                                 }]
                             }
-                        }));
+                        })));
                     }
 
                     // If no content blocks at all, add an empty text block
@@ -655,8 +683,8 @@ impl AgentAdapter for ClaudeAdapter {
                         }));
                     }
 
-                    // Emit the assistant event
-                    let assistant_event = json!({
+                    // Emit the assistant event with parentUuid
+                    let mut assistant_event = json!({
                         "type": "assistant",
                         "uuid": event_uuid,
                         "timestamp": ts,
@@ -668,20 +696,27 @@ impl AgentAdapter for ClaudeAdapter {
                             "content": content_blocks
                         }
                     });
+                    if let Some(parent) = &prev_uuid {
+                        assistant_event.as_object_mut().unwrap().insert("parentUuid".to_string(), json!(parent));
+                    }
                     writeln!(file, "{}", serde_json::to_string(&assistant_event)?)?;
+                    prev_uuid = Some(event_uuid);
 
-                    // Emit tool_result events after the assistant event
-                    for result_event in &tool_result_events {
-                        writeln!(file, "{}", serde_json::to_string(result_event)?)?;
+                    // Emit tool_result events after the assistant event, chaining parentUuid
+                    for (result_uuid, mut result_event) in tool_result_events {
+                        if let Some(parent) = &prev_uuid {
+                            result_event.as_object_mut().unwrap().insert("parentUuid".to_string(), json!(parent));
+                        }
+                        writeln!(file, "{}", serde_json::to_string(&result_event)?)?;
+                        prev_uuid = Some(result_uuid);
                     }
                 }
             }
         }
 
-        // Emit summary event if present
+        // Emit summary event with leafUuid pointing to the last emitted event
         if let Some(summary_text) = &conv.summary {
-            // Find the last event UUID (use a new one if no messages)
-            let leaf_uuid = Uuid::new_v4().to_string();
+            let leaf_uuid = prev_uuid.unwrap_or_else(|| Uuid::new_v4().to_string());
             let summary_event = json!({
                 "type": "summary",
                 "summary": summary_text,
@@ -1284,5 +1319,121 @@ mod tests {
         assert_eq!(conv.messages[2].tool_calls[0].name, "Write");
         // Two file changes
         assert_eq!(conv.file_changes.len(), 2);
+    }
+
+    #[test]
+    fn test_write_emits_file_history_snapshot() {
+        let tmp = TempDir::new().unwrap();
+        let adapter = ClaudeAdapter::with_projects_dir(tmp.path().to_path_buf());
+        let now = Utc::now();
+
+        let conv = Conversation {
+            id: "snap-test".to_string(),
+            source_agent: AgentKind::Claude,
+            project_dir: "/tmp/snap".to_string(),
+            created_at: now,
+            updated_at: now,
+            summary: None,
+            messages: vec![Message {
+                id: Uuid::new_v4(),
+                timestamp: now,
+                role: Role::User,
+                content: "Hello".to_string(),
+                tool_calls: Vec::new(),
+                metadata: HashMap::new(),
+            }],
+            file_changes: vec![FileChange {
+                path: "src/main.rs".to_string(),
+                change_type: ChangeType::Created,
+                timestamp: now,
+                message_id: Uuid::new_v4(),
+            }],
+        };
+
+        let session_id = adapter.write_conversation(&conv).unwrap();
+        let encoded = encode_project_path("/tmp/snap");
+        let session_file = tmp.path().join(&encoded).join(format!("{}.jsonl", session_id));
+        let content = fs::read_to_string(&session_file).unwrap();
+        let first_line = content.lines().next().unwrap();
+        let first_event: Value = serde_json::from_str(first_line).unwrap();
+
+        assert_eq!(first_event["type"], "file-history-snapshot");
+        assert!(first_event["snapshot"]["trackedFileBackups"]["src/main.rs"].is_object());
+
+        // Read back should recover file changes
+        let read_conv = adapter.read_conversation(&session_id).unwrap();
+        assert!(!read_conv.file_changes.is_empty());
+        assert_eq!(read_conv.file_changes[0].path, "src/main.rs");
+    }
+
+    #[test]
+    fn test_write_emits_parent_uuid_chain() {
+        let tmp = TempDir::new().unwrap();
+        let adapter = ClaudeAdapter::with_projects_dir(tmp.path().to_path_buf());
+        let now = Utc::now();
+
+        let conv = Conversation {
+            id: "chain-test".to_string(),
+            source_agent: AgentKind::Claude,
+            project_dir: "/tmp/chain".to_string(),
+            created_at: now,
+            updated_at: now,
+            summary: Some("Chain test".to_string()),
+            messages: vec![
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "First".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::Assistant,
+                    content: "Second".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "Third".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+            ],
+            file_changes: Vec::new(),
+        };
+
+        let session_id = adapter.write_conversation(&conv).unwrap();
+        let encoded = encode_project_path("/tmp/chain");
+        let session_file = tmp.path().join(&encoded).join(format!("{}.jsonl", session_id));
+        let content = fs::read_to_string(&session_file).unwrap();
+        let events: Vec<Value> = content
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+
+        // First event has no parentUuid, subsequent events do
+        assert!(events[0].get("parentUuid").is_none());
+        for i in 1..events.len() {
+            if events[i]["type"] == "summary" {
+                continue;
+            }
+            assert!(
+                events[i].get("parentUuid").is_some(),
+                "Event {} should have parentUuid",
+                i
+            );
+        }
+
+        // Summary leafUuid should match the last message event's uuid
+        let summary = events.last().unwrap();
+        assert_eq!(summary["type"], "summary");
+        let last_msg_uuid = &events[events.len() - 2]["uuid"];
+        assert_eq!(summary["leafUuid"], *last_msg_uuid);
     }
 }
