@@ -217,7 +217,7 @@ fn handle_enter(
             };
 
             // Read the full conversation from the source adapter.
-            let conversation = match adapters[source_idx].read_conversation(&conv_id) {
+            let mut conversation = match adapters[source_idx].read_conversation(&conv_id) {
                 Ok(conv) => conv,
                 Err(e) => {
                     app.status_message =
@@ -225,6 +225,12 @@ fn handle_enter(
                     return;
                 }
             };
+
+            // Use the current working directory so the target agent can find
+            // the session when the user runs the resume command from here.
+            if let Ok(cwd) = std::env::current_dir() {
+                conversation.project_dir = cwd.to_string_lossy().to_string();
+            }
 
             match app.transfer_method {
                 TransferMethod::StdinPipe => {
