@@ -101,15 +101,23 @@ impl GeminiAdapter {
             .parse::<DateTime<Utc>>()
             .unwrap_or_else(|_| Utc::now());
 
-        let message_count = session
-            .messages
-            .iter()
-            .filter(|m| m.message_type == "user" || m.message_type == "gemini")
-            .count();
+        let mut message_count = 0;
+        let mut first_user_message: Option<String> = None;
 
         // Count unique file paths from tool calls
         let mut file_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
         for msg in &session.messages {
+            if msg.message_type == "user" || msg.message_type == "gemini" {
+                message_count += 1;
+            }
+            if msg.message_type == "user" && first_user_message.is_none() {
+                if let Some(content) = &msg.content {
+                    if !content.is_empty() {
+                        let truncated = truncate_str(content, 100);
+                        first_user_message = Some(truncated);
+                    }
+                }
+            }
             for tc in &msg.tool_calls {
                 if let Some(args) = &tc.args {
                     if let Some(fp) = extract_file_path_from_args(&tc.name, args) {
@@ -125,10 +133,21 @@ impl GeminiAdapter {
             project_dir,
             created_at: start_time,
             updated_at: last_updated,
-            summary: session.summary,
+            summary: session.summary.or(first_user_message),
             message_count,
             file_count: file_paths.len(),
         })
+    }
+}
+
+/// Truncate a string to at most `max_chars` characters, appending "..." if truncated.
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let mut chars = s.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{}...", truncated)
+    } else {
+        truncated
     }
 }
 
@@ -585,11 +604,7 @@ impl AgentAdapter for GeminiAdapter {
                     serde_json::to_string_pretty(&tc.input).unwrap_or_default()
                 ));
                 if let Some(out) = &tc.output {
-                    let truncated = if out.len() > 500 {
-                        format!("{}... (truncated)", &out[..500])
-                    } else {
-                        out.clone()
-                    };
+                    let truncated = truncate_str(out, 500);
                     output.push_str(&format!("Output: {}\n", truncated));
                 }
                 output.push('\n');

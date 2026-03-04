@@ -403,6 +403,17 @@ fn handle_response_item(
     }
 }
 
+/// Truncate a string to at most `max_chars` characters, appending "..." if truncated.
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let mut chars = s.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{}...", truncated)
+    } else {
+        truncated
+    }
+}
+
 /// Attach a completed tool call to the last assistant message,
 /// or create a new assistant message if needed.
 fn attach_tool_call(messages: &mut Vec<Message>, ts: DateTime<Utc>, tool_call: ToolCall) {
@@ -446,13 +457,7 @@ impl AgentAdapter for CodexAdapter {
                 let summary = if !t.title.is_empty() {
                     Some(t.title.clone())
                 } else if !t.first_user_message.is_empty() {
-                    // Truncate long first messages
-                    let msg = &t.first_user_message;
-                    if msg.len() > 100 {
-                        Some(format!("{}...", &msg[..100]))
-                    } else {
-                        Some(msg.clone())
-                    }
+                    Some(truncate_str(&t.first_user_message, 100))
                 } else {
                     None
                 };

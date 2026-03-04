@@ -74,6 +74,7 @@ impl ClaudeAdapter {
         let mut message_count: usize = 0;
         let mut file_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut summary: Option<String> = None;
+        let mut first_user_message: Option<String> = None;
         let mut first_timestamp: Option<DateTime<Utc>> = None;
         let mut last_timestamp: Option<DateTime<Utc>> = None;
 
@@ -100,7 +101,12 @@ impl ClaudeAdapter {
                 "user" if !event.is_sidechain => {
                     if let Some(msg) = &event.message {
                         match &msg.content {
-                            ClaudeContent::Text(_) => message_count += 1,
+                            ClaudeContent::Text(text) => {
+                                message_count += 1;
+                                if first_user_message.is_none() && !text.is_empty() {
+                                    first_user_message = Some(truncate_str(text, 100));
+                                }
+                            }
                             ClaudeContent::Blocks(_) => {
                                 // tool_result blocks don't count as separate user messages
                             }
@@ -151,10 +157,21 @@ impl ClaudeAdapter {
             project_dir,
             created_at: first_timestamp.unwrap_or(now),
             updated_at: last_timestamp.unwrap_or(now),
-            summary,
+            summary: summary.or(first_user_message),
             message_count,
             file_count: file_paths.len(),
         })
+    }
+}
+
+/// Truncate a string to at most `max_chars` characters, appending "..." if truncated.
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let mut chars = s.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{}...", truncated)
+    } else {
+        truncated
     }
 }
 
