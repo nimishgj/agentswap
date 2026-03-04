@@ -11,6 +11,7 @@ dependencies = [
  "agentswap-core",
  "agentswap-gemini",
  "anyhow",
+ "chrono",
  "crossterm",
  "ratatui",
 ]
@@ -37,9 +38,11 @@ dependencies = [
  "agentswap-core",
  "anyhow",
  "chrono",
+ "dirs",
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "uuid",
  "walkdir",
 ]
@@ -62,8 +65,10 @@ dependencies = [
  "agentswap-core",
  "anyhow",
  "chrono",
+ "dirs",
  "serde",
  "serde_json",
+ "tempfile",
  "uuid",
  "walkdir",
 ]

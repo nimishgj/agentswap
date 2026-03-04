@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::fs;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -48,6 +48,33 @@ impl CodexAdapter {
         let path = self.db_path();
         Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .with_context(|| format!("Failed to open Codex database: {}", path.display()))
+    }
+
+    /// Open the SQLite database in read-write mode, creating it if necessary.
+    fn open_db_rw(&self) -> Result<Connection> {
+        let path = self.db_path();
+        let conn = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+        )
+        .with_context(|| format!("Failed to open Codex database for writing: {}", path.display()))?;
+
+        // Ensure the threads table exists
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                git_branch TEXT,
+                first_user_message TEXT NOT NULL DEFAULT ''
+            );",
+        )?;
+
+        Ok(conn)
     }
 
     /// Query all threads from the database.
@@ -488,8 +515,184 @@ impl AgentAdapter for CodexAdapter {
         })
     }
 
-    fn write_conversation(&self, _conv: &Conversation) -> Result<String> {
-        anyhow::bail!("not yet implemented")
+    fn write_conversation(&self, conv: &Conversation) -> Result<String> {
+        // Generate a new thread ID
+        let thread_id = Uuid::new_v4().to_string();
+
+        // Create the rollout file path: sessions/YYYY/MM/DD/rollout-<uuid>.jsonl
+        let now = conv.created_at;
+        let sessions_dir = self.codex_dir
+            .join("sessions")
+            .join(format!("{:04}", now.year()))
+            .join(format!("{:02}", now.month()))
+            .join(format!("{:02}", now.day()));
+        fs::create_dir_all(&sessions_dir)
+            .with_context(|| format!("Failed to create sessions directory: {}", sessions_dir.display()))?;
+
+        let rollout_filename = format!("rollout-{}.jsonl", thread_id);
+        let rollout_path = sessions_dir.join(&rollout_filename);
+
+        let mut file = fs::File::create(&rollout_path)
+            .with_context(|| format!("Failed to create rollout file: {}", rollout_path.display()))?;
+
+        // Emit session_meta event
+        let session_meta_ts = conv.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let session_meta = json!({
+            "timestamp": session_meta_ts,
+            "type": "session_meta",
+            "payload": {
+                "id": thread_id,
+                "cwd": conv.project_dir
+            }
+        });
+        writeln!(file, "{}", serde_json::to_string(&session_meta)?)?;
+
+        // Track the first user message for the DB
+        let mut first_user_message = String::new();
+
+        // Emit events for each message
+        for msg in &conv.messages {
+            let ts = msg.timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+
+            match msg.role {
+                Role::User | Role::System => {
+                    let event = json!({
+                        "timestamp": ts,
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "user_message",
+                            "message": msg.content
+                        }
+                    });
+                    writeln!(file, "{}", serde_json::to_string(&event)?)?;
+
+                    if first_user_message.is_empty() && msg.role == Role::User && !msg.content.is_empty() {
+                        first_user_message = msg.content.clone();
+                    }
+                }
+                Role::Assistant => {
+                    // Emit reasoning if present
+                    if let Some(reasoning) = msg.metadata.get("reasoning") {
+                        if let Some(text) = reasoning.as_str() {
+                            if !text.is_empty() {
+                                let event = json!({
+                                    "timestamp": ts,
+                                    "type": "event_msg",
+                                    "payload": {
+                                        "type": "agent_reasoning",
+                                        "text": text
+                                    }
+                                });
+                                writeln!(file, "{}", serde_json::to_string(&event)?)?;
+                            }
+                        }
+                    }
+
+                    // Emit agent_message if content is non-empty
+                    if !msg.content.is_empty() {
+                        let event = json!({
+                            "timestamp": ts,
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "agent_message",
+                                "message": msg.content,
+                                "phase": "commentary"
+                            }
+                        });
+                        writeln!(file, "{}", serde_json::to_string(&event)?)?;
+                    }
+
+                    // Emit tool calls as function_call + function_call_output pairs
+                    for tc in &msg.tool_calls {
+                        let call_id = format!("call_{}", Uuid::new_v4().to_string().replace('-', ""));
+
+                        // Determine if this is a "custom_tool_call" (like apply_patch)
+                        // or a regular "function_call"
+                        let is_custom = tc.input.is_string();
+
+                        if is_custom {
+                            let input_text = tc.input.as_str().unwrap_or("").to_string();
+                            let function_call = json!({
+                                "timestamp": ts,
+                                "type": "response_item",
+                                "payload": {
+                                    "type": "custom_tool_call",
+                                    "status": "completed",
+                                    "call_id": call_id,
+                                    "name": tc.name,
+                                    "input": input_text
+                                }
+                            });
+                            writeln!(file, "{}", serde_json::to_string(&function_call)?)?;
+
+                            let output = tc.output.as_deref().unwrap_or("").to_string();
+                            let call_output = json!({
+                                "timestamp": ts,
+                                "type": "response_item",
+                                "payload": {
+                                    "type": "custom_tool_call_output",
+                                    "call_id": call_id,
+                                    "output": output
+                                }
+                            });
+                            writeln!(file, "{}", serde_json::to_string(&call_output)?)?;
+                        } else {
+                            // Regular function_call: arguments is JSON-encoded string
+                            let arguments = serde_json::to_string(&tc.input)?;
+                            let function_call = json!({
+                                "timestamp": ts,
+                                "type": "response_item",
+                                "payload": {
+                                    "type": "function_call",
+                                    "name": tc.name,
+                                    "arguments": arguments,
+                                    "call_id": call_id
+                                }
+                            });
+                            writeln!(file, "{}", serde_json::to_string(&function_call)?)?;
+
+                            let output = tc.output.as_deref().unwrap_or("").to_string();
+                            let call_output = json!({
+                                "timestamp": ts,
+                                "type": "response_item",
+                                "payload": {
+                                    "type": "function_call_output",
+                                    "call_id": call_id,
+                                    "output": output
+                                }
+                            });
+                            writeln!(file, "{}", serde_json::to_string(&call_output)?)?;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Insert into the SQLite threads table
+        let title = conv.summary.clone().unwrap_or_default();
+        let created_at = conv.created_at.timestamp();
+        let updated_at = conv.updated_at.timestamp();
+        let rollout_path_str = rollout_path.to_string_lossy().to_string();
+
+        let conn = self.open_db_rw()?;
+        conn.execute(
+            "INSERT INTO threads (id, rollout_path, cwd, title, created_at, updated_at, \
+             tokens_used, git_branch, first_user_message) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                thread_id,
+                rollout_path_str,
+                conv.project_dir,
+                title,
+                created_at,
+                updated_at,
+                0i64, // tokens_used
+                None::<String>, // git_branch
+                first_user_message,
+            ],
+        )?;
+
+        Ok(thread_id)
     }
 
     fn render_prompt(&self, conv: &Conversation) -> Result<String> {
@@ -1240,28 +1443,301 @@ mod tests {
     }
 
     #[test]
-    fn test_write_conversation_not_implemented() {
+    fn test_write_conversation_empty() {
         let tmp = TempDir::new().unwrap();
-        create_test_db(tmp.path());
-
         let adapter = CodexAdapter::with_codex_dir(tmp.path().to_path_buf());
         let now = Utc::now();
         let conv = Conversation {
             id: "test".to_string(),
             source_agent: AgentKind::Codex,
-            project_dir: "/tmp".to_string(),
+            project_dir: "/tmp/project".to_string(),
             created_at: now,
             updated_at: now,
             summary: None,
             messages: Vec::new(),
             file_changes: Vec::new(),
         };
-        let result = adapter.write_conversation(&conv);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("not yet implemented"));
+        let thread_id = adapter.write_conversation(&conv).unwrap();
+        assert!(!thread_id.is_empty());
+
+        // The adapter should have created the DB and the rollout file
+        assert!(adapter.db_path().exists());
+
+        // Should be readable via find_thread
+        let thread = adapter.find_thread(&thread_id).unwrap();
+        assert_eq!(thread.cwd, "/tmp/project");
+    }
+
+    #[test]
+    fn test_write_and_read_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let adapter = CodexAdapter::with_codex_dir(tmp.path().to_path_buf());
+        let now = Utc::now();
+
+        let conv = Conversation {
+            id: "original-id".to_string(),
+            source_agent: AgentKind::Codex,
+            project_dir: "/tmp/project".to_string(),
+            created_at: now,
+            updated_at: now,
+            summary: Some("Test conversation".to_string()),
+            messages: vec![
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "Hello Codex!".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::Assistant,
+                    content: "Let me help you.".to_string(),
+                    tool_calls: vec![ToolCall {
+                        name: "exec_command".to_string(),
+                        input: json!({"cmd": "ls -la"}),
+                        output: Some("file1.rs\nfile2.rs".to_string()),
+                        status: ToolStatus::Success,
+                    }],
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "Thanks!".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+            ],
+            file_changes: Vec::new(),
+        };
+
+        // Write
+        let thread_id = adapter.write_conversation(&conv).unwrap();
+        assert!(!thread_id.is_empty());
+
+        // Read back
+        let read_conv = adapter.read_conversation(&thread_id).unwrap();
+
+        assert_eq!(read_conv.source_agent, AgentKind::Codex);
+        assert_eq!(read_conv.project_dir, "/tmp/project");
+        assert_eq!(read_conv.summary.as_deref(), Some("Test conversation"));
+
+        // Verify user messages
+        let user_msgs: Vec<&Message> = read_conv.messages.iter()
+            .filter(|m| m.role == Role::User)
+            .collect();
+        assert_eq!(user_msgs.len(), 2);
+        assert_eq!(user_msgs[0].content, "Hello Codex!");
+        assert_eq!(user_msgs[1].content, "Thanks!");
+
+        // Verify assistant message with tool call
+        let assistant_msgs: Vec<&Message> = read_conv.messages.iter()
+            .filter(|m| m.role == Role::Assistant)
+            .collect();
+        assert!(!assistant_msgs.is_empty());
+
+        // Find the assistant message that has tool calls
+        let assistant_with_tools: Vec<&&Message> = assistant_msgs.iter()
+            .filter(|m| !m.tool_calls.is_empty())
+            .collect();
+        assert!(!assistant_with_tools.is_empty());
+        let tc = &assistant_with_tools[0].tool_calls[0];
+        assert_eq!(tc.name, "exec_command");
+        assert_eq!(tc.input["cmd"], "ls -la");
+        assert_eq!(tc.output.as_deref(), Some("file1.rs\nfile2.rs"));
+    }
+
+    #[test]
+    fn test_write_conversation_with_reasoning() {
+        let tmp = TempDir::new().unwrap();
+        let adapter = CodexAdapter::with_codex_dir(tmp.path().to_path_buf());
+        let now = Utc::now();
+
+        let mut metadata = HashMap::new();
+        metadata.insert("reasoning".to_string(), json!("Deep analysis here"));
+
+        let conv = Conversation {
+            id: "reason-test".to_string(),
+            source_agent: AgentKind::Codex,
+            project_dir: "/tmp".to_string(),
+            created_at: now,
+            updated_at: now,
+            summary: None,
+            messages: vec![
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "Think about this".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::Assistant,
+                    content: "Here is my answer.".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata,
+                },
+            ],
+            file_changes: Vec::new(),
+        };
+
+        let thread_id = adapter.write_conversation(&conv).unwrap();
+        let read_conv = adapter.read_conversation(&thread_id).unwrap();
+
+        // The reasoning should be attached to the assistant message
+        let assistant_msgs: Vec<&Message> = read_conv.messages.iter()
+            .filter(|m| m.role == Role::Assistant)
+            .collect();
+        assert!(!assistant_msgs.is_empty());
+
+        // Find the assistant message with reasoning in metadata
+        let with_reasoning: Vec<&&Message> = assistant_msgs.iter()
+            .filter(|m| m.metadata.get("reasoning").is_some())
+            .collect();
+        assert!(!with_reasoning.is_empty());
+        let reasoning = with_reasoning[0].metadata.get("reasoning").unwrap();
+        assert!(reasoning.as_str().unwrap().contains("Deep analysis"));
+    }
+
+    #[test]
+    fn test_write_conversation_with_custom_tool_call() {
+        let tmp = TempDir::new().unwrap();
+        let adapter = CodexAdapter::with_codex_dir(tmp.path().to_path_buf());
+        let now = Utc::now();
+
+        let conv = Conversation {
+            id: "custom-tool-test".to_string(),
+            source_agent: AgentKind::Codex,
+            project_dir: "/tmp".to_string(),
+            created_at: now,
+            updated_at: now,
+            summary: None,
+            messages: vec![
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "patch it".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::Assistant,
+                    content: "Patching.".to_string(),
+                    tool_calls: vec![ToolCall {
+                        name: "apply_patch".to_string(),
+                        input: Value::String("*** Begin Patch\n*** Update File: /tmp/main.rs\n".to_string()),
+                        output: Some(r#"{"output":"Success. Updated the following files:\nM /tmp/main.rs\n"}"#.to_string()),
+                        status: ToolStatus::Success,
+                    }],
+                    metadata: HashMap::new(),
+                },
+            ],
+            file_changes: Vec::new(),
+        };
+
+        let thread_id = adapter.write_conversation(&conv).unwrap();
+        let read_conv = adapter.read_conversation(&thread_id).unwrap();
+
+        // Find the assistant message with the custom tool call
+        let assistant_with_tools: Vec<&Message> = read_conv.messages.iter()
+            .filter(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+            .collect();
+        assert!(!assistant_with_tools.is_empty());
+        let tc = &assistant_with_tools[0].tool_calls[0];
+        assert_eq!(tc.name, "apply_patch");
+        assert!(tc.input.is_string());
+        assert!(tc.input.as_str().unwrap().contains("Begin Patch"));
+    }
+
+    #[test]
+    fn test_write_conversation_with_system_message() {
+        let tmp = TempDir::new().unwrap();
+        let adapter = CodexAdapter::with_codex_dir(tmp.path().to_path_buf());
+        let now = Utc::now();
+
+        let conv = Conversation {
+            id: "sys-test".to_string(),
+            source_agent: AgentKind::Gemini,
+            project_dir: "/tmp".to_string(),
+            created_at: now,
+            updated_at: now,
+            summary: None,
+            messages: vec![
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::System,
+                    content: "System message".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "Hello".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+            ],
+            file_changes: Vec::new(),
+        };
+
+        let thread_id = adapter.write_conversation(&conv).unwrap();
+        let read_conv = adapter.read_conversation(&thread_id).unwrap();
+
+        // System messages are written as user_message events in Codex
+        assert!(!read_conv.messages.is_empty());
+        // The first user message in DB should be "Hello" (not system message)
+        let thread = adapter.find_thread(&thread_id).unwrap();
+        assert_eq!(thread.first_user_message, "Hello");
+    }
+
+    #[test]
+    fn test_write_conversation_db_thread_metadata() {
+        let tmp = TempDir::new().unwrap();
+        let adapter = CodexAdapter::with_codex_dir(tmp.path().to_path_buf());
+        let now = Utc::now();
+
+        let conv = Conversation {
+            id: "meta-test".to_string(),
+            source_agent: AgentKind::Codex,
+            project_dir: "/home/user/project".to_string(),
+            created_at: now,
+            updated_at: now,
+            summary: Some("Important work".to_string()),
+            messages: vec![
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "first message".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+            ],
+            file_changes: Vec::new(),
+        };
+
+        let thread_id = adapter.write_conversation(&conv).unwrap();
+
+        // Verify the thread metadata in the DB
+        let thread = adapter.find_thread(&thread_id).unwrap();
+        assert_eq!(thread.cwd, "/home/user/project");
+        assert_eq!(thread.title, "Important work");
+        assert_eq!(thread.first_user_message, "first message");
+        assert_eq!(thread.created_at, now.timestamp());
+        assert_eq!(thread.updated_at, now.timestamp());
     }
 
     #[test]

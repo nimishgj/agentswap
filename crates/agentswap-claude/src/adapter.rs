@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -168,6 +168,13 @@ fn extract_file_path(tool_name: &str, input: &Value) -> Option<String> {
             .map(|s| s.to_string()),
         _ => None,
     }
+}
+
+/// Encode a project directory path into Claude's path-encoded format.
+///
+/// `/Users/foo/bar` becomes `-Users-foo-bar`.
+fn encode_project_path(path: &str) -> String {
+    path.replace('/', "-")
 }
 
 /// Pending tool use info collected from assistant tool_use blocks.
@@ -545,8 +552,145 @@ impl AgentAdapter for ClaudeAdapter {
         })
     }
 
-    fn write_conversation(&self, _conv: &Conversation) -> Result<String> {
-        anyhow::bail!("not yet implemented")
+    fn write_conversation(&self, conv: &Conversation) -> Result<String> {
+        // Generate a new session UUID for this conversation
+        let session_id = Uuid::new_v4().to_string();
+
+        // Determine the project subdirectory using path encoding
+        let encoded_project = encode_project_path(&conv.project_dir);
+        let project_dir = self.projects_dir.join(&encoded_project);
+        fs::create_dir_all(&project_dir)
+            .with_context(|| format!("Failed to create project directory: {}", project_dir.display()))?;
+
+        let file_path = project_dir.join(format!("{}.jsonl", session_id));
+        let mut file = fs::File::create(&file_path)
+            .with_context(|| format!("Failed to create session file: {}", file_path.display()))?;
+
+        // Collect pending tool calls from assistant messages to emit tool_use + tool_result pairs
+        for msg in &conv.messages {
+            let ts = msg.timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let event_uuid = Uuid::new_v4().to_string();
+
+            match msg.role {
+                Role::User | Role::System => {
+                    // Check if this message has any tool_calls that should be emitted as
+                    // tool_result blocks (unusual for user messages, but handle gracefully)
+                    let event = json!({
+                        "type": "user",
+                        "uuid": event_uuid,
+                        "timestamp": ts,
+                        "sessionId": session_id,
+                        "isSidechain": false,
+                        "message": {
+                            "role": "user",
+                            "content": msg.content.clone()
+                        }
+                    });
+                    writeln!(file, "{}", serde_json::to_string(&event)?)?;
+                }
+                Role::Assistant => {
+                    // Build content blocks for the assistant message
+                    let mut content_blocks: Vec<Value> = Vec::new();
+                    let msg_api_id = format!("msg_{}", Uuid::new_v4().to_string().replace('-', ""));
+
+                    // Add thinking blocks if present in metadata
+                    if let Some(thinking) = msg.metadata.get("thinking") {
+                        if let Some(arr) = thinking.as_array() {
+                            for thought in arr {
+                                if let Some(t) = thought.as_str() {
+                                    content_blocks.push(json!({
+                                        "type": "thinking",
+                                        "thinking": t,
+                                        "signature": "imported"
+                                    }));
+                                }
+                            }
+                        }
+                    }
+
+                    // Add text content block if non-empty
+                    if !msg.content.is_empty() {
+                        content_blocks.push(json!({
+                            "type": "text",
+                            "text": msg.content
+                        }));
+                    }
+
+                    // Add tool_use blocks
+                    let mut tool_result_events: Vec<Value> = Vec::new();
+                    for tc in &msg.tool_calls {
+                        let tool_use_id = format!("toolu_{}", Uuid::new_v4().to_string().replace('-', ""));
+                        content_blocks.push(json!({
+                            "type": "tool_use",
+                            "id": tool_use_id,
+                            "name": tc.name,
+                            "input": tc.input
+                        }));
+
+                        // Prepare corresponding tool_result event (emitted as a user event)
+                        let result_uuid = Uuid::new_v4().to_string();
+                        let result_content = tc.output.as_deref().unwrap_or("");
+                        tool_result_events.push(json!({
+                            "type": "user",
+                            "uuid": result_uuid,
+                            "timestamp": ts,
+                            "sessionId": session_id,
+                            "isSidechain": false,
+                            "message": {
+                                "role": "user",
+                                "content": [{
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use_id,
+                                    "content": result_content
+                                }]
+                            }
+                        }));
+                    }
+
+                    // If no content blocks at all, add an empty text block
+                    if content_blocks.is_empty() {
+                        content_blocks.push(json!({
+                            "type": "text",
+                            "text": ""
+                        }));
+                    }
+
+                    // Emit the assistant event
+                    let assistant_event = json!({
+                        "type": "assistant",
+                        "uuid": event_uuid,
+                        "timestamp": ts,
+                        "sessionId": session_id,
+                        "isSidechain": false,
+                        "message": {
+                            "role": "assistant",
+                            "id": msg_api_id,
+                            "content": content_blocks
+                        }
+                    });
+                    writeln!(file, "{}", serde_json::to_string(&assistant_event)?)?;
+
+                    // Emit tool_result events after the assistant event
+                    for result_event in &tool_result_events {
+                        writeln!(file, "{}", serde_json::to_string(result_event)?)?;
+                    }
+                }
+            }
+        }
+
+        // Emit summary event if present
+        if let Some(summary_text) = &conv.summary {
+            // Find the last event UUID (use a new one if no messages)
+            let leaf_uuid = Uuid::new_v4().to_string();
+            let summary_event = json!({
+                "type": "summary",
+                "summary": summary_text,
+                "leafUuid": leaf_uuid
+            });
+            writeln!(file, "{}", serde_json::to_string(&summary_event)?)?;
+        }
+
+        Ok(session_id)
     }
 
     fn render_prompt(&self, conv: &Conversation) -> Result<String> {
@@ -604,7 +748,12 @@ impl AgentAdapter for ClaudeAdapter {
                 ));
                 if let Some(out) = &tc.output {
                     let truncated = if out.len() > 500 {
-                        format!("{}... (truncated)", &out[..500])
+                        // Find a valid UTF-8 char boundary at or before byte 500
+                        let mut end = 500;
+                        while end > 0 && !out.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        format!("{}... (truncated)", &out[..end])
                     } else {
                         out.clone()
                     };
@@ -892,26 +1041,205 @@ mod tests {
     }
 
     #[test]
-    fn test_write_conversation_not_implemented() {
+    fn test_write_conversation_empty() {
         let tmp = TempDir::new().unwrap();
         let adapter = ClaudeAdapter::with_projects_dir(tmp.path().to_path_buf());
         let now = Utc::now();
         let conv = Conversation {
             id: "test".to_string(),
             source_agent: AgentKind::Claude,
-            project_dir: "/tmp".to_string(),
+            project_dir: "/tmp/project".to_string(),
             created_at: now,
             updated_at: now,
             summary: None,
             messages: Vec::new(),
             file_changes: Vec::new(),
         };
-        let result = adapter.write_conversation(&conv);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("not yet implemented"));
+        let session_id = adapter.write_conversation(&conv).unwrap();
+        assert!(!session_id.is_empty());
+
+        // Verify the file was created
+        let encoded = encode_project_path("/tmp/project");
+        let session_file = tmp.path().join(&encoded).join(format!("{}.jsonl", session_id));
+        assert!(session_file.exists());
+    }
+
+    #[test]
+    fn test_write_and_read_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let adapter = ClaudeAdapter::with_projects_dir(tmp.path().to_path_buf());
+        let now = Utc::now();
+
+        let conv = Conversation {
+            id: "original-id".to_string(),
+            source_agent: AgentKind::Claude,
+            project_dir: "/Users/test/myproject".to_string(),
+            created_at: now,
+            updated_at: now,
+            summary: Some("A test conversation".to_string()),
+            messages: vec![
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "Hello, write a file!".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::Assistant,
+                    content: "Sure, I will write a file.".to_string(),
+                    tool_calls: vec![ToolCall {
+                        name: "Write".to_string(),
+                        input: serde_json::json!({"file_path": "/tmp/test.rs", "content": "fn main() {}"}),
+                        output: Some("File written successfully".to_string()),
+                        status: ToolStatus::Success,
+                    }],
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "Thanks!".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+            ],
+            file_changes: Vec::new(),
+        };
+
+        // Write
+        let session_id = adapter.write_conversation(&conv).unwrap();
+        assert!(!session_id.is_empty());
+
+        // Read back
+        let read_conv = adapter.read_conversation(&session_id).unwrap();
+
+        assert_eq!(read_conv.source_agent, AgentKind::Claude);
+        assert_eq!(read_conv.project_dir, "/Users/test/myproject");
+        assert_eq!(read_conv.summary.as_deref(), Some("A test conversation"));
+
+        // Verify message content (order and text)
+        // After writing, user and assistant messages should round-trip
+        // Note: tool results emit extra "user" events in Claude format, so
+        // the read back may contain more events. Focus on text messages.
+        let user_msgs: Vec<&Message> = read_conv.messages.iter()
+            .filter(|m| m.role == Role::User && !m.content.is_empty())
+            .collect();
+        let assistant_msgs: Vec<&Message> = read_conv.messages.iter()
+            .filter(|m| m.role == Role::Assistant)
+            .collect();
+
+        assert_eq!(user_msgs.len(), 2);
+        assert_eq!(user_msgs[0].content, "Hello, write a file!");
+        assert_eq!(user_msgs[1].content, "Thanks!");
+        assert!(!assistant_msgs.is_empty());
+        assert_eq!(assistant_msgs[0].content, "Sure, I will write a file.");
+        assert_eq!(assistant_msgs[0].tool_calls.len(), 1);
+        assert_eq!(assistant_msgs[0].tool_calls[0].name, "Write");
+    }
+
+    #[test]
+    fn test_write_conversation_with_thinking() {
+        let tmp = TempDir::new().unwrap();
+        let adapter = ClaudeAdapter::with_projects_dir(tmp.path().to_path_buf());
+        let now = Utc::now();
+
+        let mut metadata = HashMap::new();
+        metadata.insert("thinking".to_string(), serde_json::json!(["Let me think..."]));
+
+        let conv = Conversation {
+            id: "think-test".to_string(),
+            source_agent: AgentKind::Claude,
+            project_dir: "/tmp/think".to_string(),
+            created_at: now,
+            updated_at: now,
+            summary: None,
+            messages: vec![
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "Question".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::Assistant,
+                    content: "Answer".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata,
+                },
+            ],
+            file_changes: Vec::new(),
+        };
+
+        let session_id = adapter.write_conversation(&conv).unwrap();
+        let read_conv = adapter.read_conversation(&session_id).unwrap();
+
+        let assistant = read_conv.messages.iter()
+            .find(|m| m.role == Role::Assistant)
+            .unwrap();
+        assert_eq!(assistant.content, "Answer");
+        // The thinking metadata should be preserved
+        let thinking = assistant.metadata.get("thinking").unwrap();
+        let arr = thinking.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0].as_str().unwrap(), "Let me think...");
+    }
+
+    #[test]
+    fn test_write_conversation_with_system_message() {
+        let tmp = TempDir::new().unwrap();
+        let adapter = ClaudeAdapter::with_projects_dir(tmp.path().to_path_buf());
+        let now = Utc::now();
+
+        let conv = Conversation {
+            id: "sys-test".to_string(),
+            source_agent: AgentKind::Gemini,
+            project_dir: "/tmp/sys".to_string(),
+            created_at: now,
+            updated_at: now,
+            summary: None,
+            messages: vec![
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::System,
+                    content: "System message".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+                Message {
+                    id: Uuid::new_v4(),
+                    timestamp: now,
+                    role: Role::User,
+                    content: "Hello".to_string(),
+                    tool_calls: Vec::new(),
+                    metadata: HashMap::new(),
+                },
+            ],
+            file_changes: Vec::new(),
+        };
+
+        // System messages are written as user messages in Claude format
+        let session_id = adapter.write_conversation(&conv).unwrap();
+        let read_conv = adapter.read_conversation(&session_id).unwrap();
+
+        // Both system and user messages appear as User role in Claude format
+        assert!(read_conv.messages.len() >= 2);
+    }
+
+    #[test]
+    fn test_encode_project_path() {
+        assert_eq!(encode_project_path("/Users/foo/bar"), "-Users-foo-bar");
+        assert_eq!(encode_project_path("/tmp"), "-tmp");
+        assert_eq!(encode_project_path(""), "");
     }
 
     #[test]
