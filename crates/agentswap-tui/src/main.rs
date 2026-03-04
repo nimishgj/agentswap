@@ -217,8 +217,7 @@ fn handle_enter(
                         app.screen = Screen::ConversationList;
                     }
                     Err(e) => {
-                        app.status_message =
-                            Some(format!("Error loading conversations: {}", e));
+                        app.status_message = Some(format!("Error loading conversations: {}", e));
                     }
                 }
             }
@@ -248,10 +247,7 @@ fn handle_enter(
             let source_idx = app.selected_agent_idx;
 
             // Get the selected conversation ID.
-            let conv_id = match app
-                .filtered_conversations()
-                .get(app.selected_conv_idx)
-            {
+            let conv_id = match app.filtered_conversations().get(app.selected_conv_idx) {
                 Some(c) => c.id.clone(),
                 None => {
                     app.status_message = Some("No conversation selected".to_string());
@@ -263,8 +259,7 @@ fn handle_enter(
             let mut conversation = match adapters[source_idx].read_conversation(&conv_id) {
                 Ok(conv) => conv,
                 Err(e) => {
-                    app.status_message =
-                        Some(format!("Error reading conversation: {}", e));
+                    app.status_message = Some(format!("Error reading conversation: {}", e));
                     return;
                 }
             };
@@ -281,22 +276,18 @@ fn handle_enter(
                     let prompt = match adapters[source_idx].render_prompt(&conversation) {
                         Ok(p) => p,
                         Err(e) => {
-                            app.status_message =
-                                Some(format!("Error rendering prompt: {}", e));
+                            app.status_message = Some(format!("Error rendering prompt: {}", e));
                             return;
                         }
                     };
 
                     match execute_stdin_transfer(&prompt, &target_kind, terminal) {
                         Ok(()) => {
-                            app.status_message = Some(format!(
-                                "Transfer complete — launched {}",
-                                target_name
-                            ));
+                            app.status_message =
+                                Some(format!("Transfer complete — launched {}", target_name));
                         }
                         Err(e) => {
-                            app.status_message =
-                                Some(format!("Transfer failed: {}", e));
+                            app.status_message = Some(format!("Transfer failed: {}", e));
                         }
                     }
                 }
@@ -310,8 +301,7 @@ fn handle_enter(
                             app.screen = Screen::TransferResult;
                         }
                         Err(e) => {
-                            app.status_message =
-                                Some(format!("Native transfer failed: {}", e));
+                            app.status_message = Some(format!("Native transfer failed: {}", e));
                         }
                     }
                 }

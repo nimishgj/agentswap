@@ -33,10 +33,7 @@ fn draw_agent_overview(f: &mut Frame, app: &App) {
     let footer_lines = if app.status_message.is_some() { 2 } else { 1 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(footer_lines as u16),
-        ])
+        .constraints([Constraint::Min(1), Constraint::Length(footer_lines as u16)])
         .split(area);
 
     // Build list items for each agent.
@@ -178,7 +175,11 @@ fn draw_conversation_list(f: &mut Frame, app: &App) {
         })
         .collect();
 
-    let block_title = format!(" {} \u{2014} Conversations ({}) ", agent_name, filtered.len());
+    let block_title = format!(
+        " {} \u{2014} Conversations ({}) ",
+        agent_name,
+        filtered.len()
+    );
 
     let list = List::new(items)
         .block(
@@ -196,7 +197,9 @@ fn draw_conversation_list(f: &mut Frame, app: &App) {
 
     let mut state = ListState::default();
     if !filtered.is_empty() {
-        state.select(Some(app.selected_conv_idx.min(filtered.len().saturating_sub(1))));
+        state.select(Some(
+            app.selected_conv_idx.min(filtered.len().saturating_sub(1)),
+        ));
     }
     f.render_stateful_widget(list, list_area, &mut state);
 
@@ -207,7 +210,9 @@ fn draw_conversation_list(f: &mut Frame, app: &App) {
             .lines()
             .map(|line| {
                 let style = if line.starts_with("## User") || line.starts_with("## Assistant") {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
                 } else if line.starts_with("**") {
                     Style::default().fg(Color::Cyan)
                 } else if line.starts_with("---") {
@@ -232,8 +237,8 @@ fn draw_conversation_list(f: &mut Frame, app: &App) {
         f.render_widget(preview, preview_rect);
 
         // Scrollbar
-        let mut scrollbar_state = ScrollbarState::new(total_lines)
-            .position(app.preview_scroll as usize);
+        let mut scrollbar_state =
+            ScrollbarState::new(total_lines).position(app.preview_scroll as usize);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None);
@@ -274,7 +279,7 @@ fn draw_transfer(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(2), // From + Conv
             Constraint::Length(1), // blank
-            Constraint::Min(1),   // Target list + Method
+            Constraint::Min(1),    // Target list + Method
         ])
         .split(inner_area);
 
@@ -286,16 +291,13 @@ fn draw_transfer(f: &mut Frame, app: &App) {
         .unwrap_or("Unknown");
 
     let conv_label = if let Some(conv) = app.filtered_conversations().get(app.selected_conv_idx) {
-        let title = conv
-            .summary
-            .as_deref()
-            .unwrap_or_else(|| {
-                if conv.id.len() > 30 {
-                    &conv.id[..30]
-                } else {
-                    &conv.id
-                }
-            });
+        let title = conv.summary.as_deref().unwrap_or_else(|| {
+            if conv.id.len() > 30 {
+                &conv.id[..30]
+            } else {
+                &conv.id
+            }
+        });
         format!("{} ({} msgs)", title, conv.message_count)
     } else {
         "None selected".to_string()
@@ -320,12 +322,12 @@ fn draw_transfer(f: &mut Frame, app: &App) {
     let lower_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),                                 // "To:" label
-            Constraint::Length(targets.len().max(1) as u16),      // target list
-            Constraint::Length(1),                                 // blank
-            Constraint::Length(1),                                 // "Method:" label
-            Constraint::Length(2),                                 // method options
-            Constraint::Min(0),                                   // filler
+            Constraint::Length(1),                           // "To:" label
+            Constraint::Length(targets.len().max(1) as u16), // target list
+            Constraint::Length(1),                           // blank
+            Constraint::Length(1),                           // "Method:" label
+            Constraint::Length(2),                           // method options
+            Constraint::Min(0),                              // filler
         ])
         .split(content_chunks[2]);
 
@@ -365,8 +367,9 @@ fn draw_transfer(f: &mut Frame, app: &App) {
 
         let mut target_state = ListState::default();
         if !targets.is_empty() {
-            target_state
-                .select(Some(app.target_agent_idx.min(targets.len().saturating_sub(1))));
+            target_state.select(Some(
+                app.target_agent_idx.min(targets.len().saturating_sub(1)),
+            ));
         }
         f.render_stateful_widget(target_list, lower_chunks[1], &mut target_state);
     }
@@ -409,7 +412,12 @@ fn draw_transfer(f: &mut Frame, app: &App) {
     method_state.select(Some(method_idx));
     f.render_stateful_widget(method_list, lower_chunks[4], &mut method_state);
 
-    draw_footer(f, chunks[1], app, "[Enter] Transfer  [Tab] Method  [Esc] Back");
+    draw_footer(
+        f,
+        chunks[1],
+        app,
+        "[Enter] Transfer  [Tab] Method  [Esc] Back",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -461,12 +469,7 @@ fn draw_transfer_result(f: &mut Frame, app: &App) {
     );
     f.render_widget(paragraph, chunks[0]);
 
-    draw_footer(
-        f,
-        chunks[1],
-        app,
-        "[c] Copy command  [Enter/Esc] Back",
-    );
+    draw_footer(f, chunks[1], app, "[c] Copy command  [Enter/Esc] Back");
 }
 
 // ---------------------------------------------------------------------------
@@ -483,7 +486,9 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App, keybindings: &str) {
 
         let status = Paragraph::new(Line::from(Span::styled(
             format!(" {}", msg),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )));
         f.render_widget(status, parts[0]);
 

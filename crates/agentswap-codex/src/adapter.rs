@@ -1,7 +1,7 @@
 use std::collections::HashMap;
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::fs;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, TimeZone, Utc};
@@ -22,6 +22,12 @@ use crate::parser::*;
 pub struct CodexAdapter {
     /// Path to the Codex home directory, typically `~/.codex`.
     codex_dir: PathBuf,
+}
+
+impl Default for CodexAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CodexAdapter {
@@ -58,7 +64,12 @@ impl CodexAdapter {
             &path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
         )
-        .with_context(|| format!("Failed to open Codex database for writing: {}", path.display()))?;
+        .with_context(|| {
+            format!(
+                "Failed to open Codex database for writing: {}",
+                path.display()
+            )
+        })?;
 
         // Ensure the threads table exists
         conn.execute_batch(
@@ -147,9 +158,7 @@ struct PendingToolCall {
 }
 
 /// Parse a rollout JSONL file into UCF messages and file changes.
-fn parse_rollout(
-    path: &Path,
-) -> Result<(Vec<Message>, Vec<FileChange>)> {
+fn parse_rollout(path: &Path) -> Result<(Vec<Message>, Vec<FileChange>)> {
     let file = fs::File::open(path)
         .with_context(|| format!("Failed to open rollout file: {}", path.display()))?;
     let reader = BufReader::new(file);
@@ -371,10 +380,7 @@ fn handle_response_item(
 
             // Detect file changes from the output
             let changes = extract_file_changes(&output);
-            let msg_id = messages
-                .last()
-                .map(|m| m.id)
-                .unwrap_or_else(Uuid::new_v4);
+            let msg_id = messages.last().map(|m| m.id).unwrap_or_else(Uuid::new_v4);
             for (indicator, path) in &changes {
                 let change_type = match indicator.as_str() {
                     "A" => ChangeType::Created,
@@ -527,22 +533,30 @@ impl AgentAdapter for CodexAdapter {
 
         // Create the rollout file path: sessions/YYYY/MM/DD/rollout-<uuid>.jsonl
         let now = conv.created_at;
-        let sessions_dir = self.codex_dir
+        let sessions_dir = self
+            .codex_dir
             .join("sessions")
             .join(format!("{:04}", now.year()))
             .join(format!("{:02}", now.month()))
             .join(format!("{:02}", now.day()));
-        fs::create_dir_all(&sessions_dir)
-            .with_context(|| format!("Failed to create sessions directory: {}", sessions_dir.display()))?;
+        fs::create_dir_all(&sessions_dir).with_context(|| {
+            format!(
+                "Failed to create sessions directory: {}",
+                sessions_dir.display()
+            )
+        })?;
 
         let rollout_filename = format!("rollout-{}.jsonl", thread_id);
         let rollout_path = sessions_dir.join(&rollout_filename);
 
-        let mut file = fs::File::create(&rollout_path)
-            .with_context(|| format!("Failed to create rollout file: {}", rollout_path.display()))?;
+        let mut file = fs::File::create(&rollout_path).with_context(|| {
+            format!("Failed to create rollout file: {}", rollout_path.display())
+        })?;
 
         // Emit session_meta event
-        let session_meta_ts = conv.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let session_meta_ts = conv
+            .created_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let session_meta = json!({
             "timestamp": session_meta_ts,
             "type": "session_meta",
@@ -558,7 +572,9 @@ impl AgentAdapter for CodexAdapter {
 
         // Emit events for each message
         for msg in &conv.messages {
-            let ts = msg.timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let ts = msg
+                .timestamp
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
             match msg.role {
                 Role::User | Role::System => {
@@ -572,7 +588,10 @@ impl AgentAdapter for CodexAdapter {
                     });
                     writeln!(file, "{}", serde_json::to_string(&event)?)?;
 
-                    if first_user_message.is_empty() && msg.role == Role::User && !msg.content.is_empty() {
+                    if first_user_message.is_empty()
+                        && msg.role == Role::User
+                        && !msg.content.is_empty()
+                    {
                         first_user_message = msg.content.clone();
                     }
                 }
@@ -610,8 +629,10 @@ impl AgentAdapter for CodexAdapter {
 
                     // Emit tool calls as function_call + function_call_output pairs
                     for tc in &msg.tool_calls {
-                        let mapped = map_tool(&conv.source_agent, &AgentKind::Codex, &tc.name, &tc.input);
-                        let call_id = format!("call_{}", Uuid::new_v4().to_string().replace('-', ""));
+                        let mapped =
+                            map_tool(&conv.source_agent, &AgentKind::Codex, &tc.name, &tc.input);
+                        let call_id =
+                            format!("call_{}", Uuid::new_v4().to_string().replace('-', ""));
 
                         // Determine if this is a "custom_tool_call" (like apply_patch)
                         // or a regular "function_call"
@@ -693,7 +714,7 @@ impl AgentAdapter for CodexAdapter {
                 title,
                 created_at,
                 updated_at,
-                0i64, // tokens_used
+                0i64,           // tokens_used
                 None::<String>, // git_branch
                 first_user_message,
             ],
@@ -1534,7 +1555,9 @@ mod tests {
         assert_eq!(read_conv.summary.as_deref(), Some("Test conversation"));
 
         // Verify user messages
-        let user_msgs: Vec<&Message> = read_conv.messages.iter()
+        let user_msgs: Vec<&Message> = read_conv
+            .messages
+            .iter()
             .filter(|m| m.role == Role::User)
             .collect();
         assert_eq!(user_msgs.len(), 2);
@@ -1542,13 +1565,16 @@ mod tests {
         assert_eq!(user_msgs[1].content, "Thanks!");
 
         // Verify assistant message with tool call
-        let assistant_msgs: Vec<&Message> = read_conv.messages.iter()
+        let assistant_msgs: Vec<&Message> = read_conv
+            .messages
+            .iter()
             .filter(|m| m.role == Role::Assistant)
             .collect();
         assert!(!assistant_msgs.is_empty());
 
         // Find the assistant message that has tool calls
-        let assistant_with_tools: Vec<&&Message> = assistant_msgs.iter()
+        let assistant_with_tools: Vec<&&Message> = assistant_msgs
+            .iter()
             .filter(|m| !m.tool_calls.is_empty())
             .collect();
         assert!(!assistant_with_tools.is_empty());
@@ -1599,13 +1625,16 @@ mod tests {
         let read_conv = adapter.read_conversation(&thread_id).unwrap();
 
         // The reasoning should be attached to the assistant message
-        let assistant_msgs: Vec<&Message> = read_conv.messages.iter()
+        let assistant_msgs: Vec<&Message> = read_conv
+            .messages
+            .iter()
             .filter(|m| m.role == Role::Assistant)
             .collect();
         assert!(!assistant_msgs.is_empty());
 
         // Find the assistant message with reasoning in metadata
-        let with_reasoning: Vec<&&Message> = assistant_msgs.iter()
+        let with_reasoning: Vec<&&Message> = assistant_msgs
+            .iter()
             .filter(|m| m.metadata.get("reasoning").is_some())
             .collect();
         assert!(!with_reasoning.is_empty());
@@ -1656,7 +1685,9 @@ mod tests {
         let read_conv = adapter.read_conversation(&thread_id).unwrap();
 
         // Find the assistant message with the custom tool call
-        let assistant_with_tools: Vec<&Message> = read_conv.messages.iter()
+        let assistant_with_tools: Vec<&Message> = read_conv
+            .messages
+            .iter()
             .filter(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
             .collect();
         assert!(!assistant_with_tools.is_empty());
@@ -1723,16 +1754,14 @@ mod tests {
             created_at: now,
             updated_at: now,
             summary: Some("Important work".to_string()),
-            messages: vec![
-                Message {
-                    id: Uuid::new_v4(),
-                    timestamp: now,
-                    role: Role::User,
-                    content: "first message".to_string(),
-                    tool_calls: Vec::new(),
-                    metadata: HashMap::new(),
-                },
-            ],
+            messages: vec![Message {
+                id: Uuid::new_v4(),
+                timestamp: now,
+                role: Role::User,
+                content: "first message".to_string(),
+                tool_calls: Vec::new(),
+                metadata: HashMap::new(),
+            }],
             file_changes: Vec::new(),
         };
 

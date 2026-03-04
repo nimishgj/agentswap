@@ -59,7 +59,10 @@ fn test_real_list_conversations() {
     for conv in &convos {
         assert!(!conv.id.is_empty(), "Conversation id should not be empty");
         assert_eq!(conv.source_agent, AgentKind::Claude);
-        assert!(!conv.project_dir.is_empty(), "project_dir should not be empty");
+        assert!(
+            !conv.project_dir.is_empty(),
+            "project_dir should not be empty"
+        );
     }
 
     // Verify sorted by most recent first
@@ -92,7 +95,10 @@ fn test_real_read_conversation_with_messages() {
     };
 
     assert_eq!(conv.source_agent, AgentKind::Claude);
-    assert!(!conv.messages.is_empty(), "Conversation should have messages");
+    assert!(
+        !conv.messages.is_empty(),
+        "Conversation should have messages"
+    );
 
     // Verify the first message is from a user
     assert_eq!(

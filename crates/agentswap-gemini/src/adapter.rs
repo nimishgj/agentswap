@@ -22,6 +22,12 @@ pub struct GeminiAdapter {
     tmp_dir: PathBuf,
 }
 
+impl Default for GeminiAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GeminiAdapter {
     /// Create a new GeminiAdapter using the default `~/.gemini/tmp` directory.
     pub fn new() -> Self {
@@ -417,18 +423,25 @@ impl AgentAdapter for GeminiAdapter {
 
         // Create the chats directory
         let chats_dir = self.tmp_dir.join(&project_hash).join("chats");
-        fs::create_dir_all(&chats_dir)
-            .with_context(|| format!("Failed to create chats directory: {}", chats_dir.display()))?;
+        fs::create_dir_all(&chats_dir).with_context(|| {
+            format!("Failed to create chats directory: {}", chats_dir.display())
+        })?;
 
         // Build the session JSON
-        let start_time = conv.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let last_updated = conv.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let start_time = conv
+            .created_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let last_updated = conv
+            .updated_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
         let mut gemini_messages: Vec<Value> = Vec::new();
 
         for msg in &conv.messages {
             let msg_id = Uuid::new_v4().to_string();
-            let ts = msg.timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let ts = msg
+                .timestamp
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
             match msg.role {
                 Role::User => {
@@ -443,7 +456,8 @@ impl AgentAdapter for GeminiAdapter {
                     // Build tool calls array (with tool name mapping)
                     let mut tool_calls: Vec<Value> = Vec::new();
                     for tc in &msg.tool_calls {
-                        let mapped = map_tool(&conv.source_agent, &AgentKind::Gemini, &tc.name, &tc.input);
+                        let mapped =
+                            map_tool(&conv.source_agent, &AgentKind::Gemini, &tc.name, &tc.input);
                         let tc_id = Uuid::new_v4().to_string();
                         let status = match tc.status {
                             ToolStatus::Success => "success",
@@ -490,7 +504,9 @@ impl AgentAdapter for GeminiAdapter {
                     }
 
                     // Extract model
-                    let model = msg.metadata.get("model")
+                    let model = msg
+                        .metadata
+                        .get("model")
                         .and_then(|v| v.as_str())
                         .unwrap_or("imported")
                         .to_string();
@@ -507,17 +523,19 @@ impl AgentAdapter for GeminiAdapter {
 
                     // Add token info if present
                     if let Some(tokens) = msg.metadata.get("tokens") {
-                        gemini_msg.as_object_mut().unwrap().insert(
-                            "tokens".to_string(),
-                            tokens.clone(),
-                        );
+                        gemini_msg
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("tokens".to_string(), tokens.clone());
                     }
 
                     gemini_messages.push(gemini_msg);
                 }
                 Role::System => {
                     // Map system messages to "info" type
-                    let sys_type = msg.metadata.get("system_type")
+                    let sys_type = msg
+                        .metadata
+                        .get("system_type")
                         .and_then(|v| v.as_str())
                         .unwrap_or("info");
                     gemini_messages.push(json!({
@@ -663,12 +681,7 @@ mod tests {
         fs::create_dir_all(&chats_dir).unwrap();
         let file_path = chats_dir.join(format!("{}.json", filename));
         let mut file = fs::File::create(&file_path).unwrap();
-        write!(
-            file,
-            "{}",
-            serde_json::to_string_pretty(content).unwrap()
-        )
-        .unwrap();
+        write!(file, "{}", serde_json::to_string_pretty(content).unwrap()).unwrap();
         file_path
     }
 
@@ -992,17 +1005,11 @@ mod tests {
         assert_eq!(conv.messages.len(), 3);
         assert_eq!(conv.messages[0].role, Role::System);
         assert_eq!(conv.messages[0].content, "MCP server started");
-        assert_eq!(
-            conv.messages[0].metadata["system_type"],
-            json!("info")
-        );
+        assert_eq!(conv.messages[0].metadata["system_type"], json!("info"));
         assert_eq!(conv.messages[1].role, Role::User);
         assert_eq!(conv.messages[2].role, Role::System);
         assert_eq!(conv.messages[2].content, "Rate limit exceeded");
-        assert_eq!(
-            conv.messages[2].metadata["system_type"],
-            json!("error")
-        );
+        assert_eq!(conv.messages[2].metadata["system_type"], json!("error"));
     }
 
     #[test]
@@ -1089,7 +1096,8 @@ mod tests {
         assert!(!session_id.is_empty());
 
         // Verify the file was created
-        let file_path = tmp.path()
+        let file_path = tmp
+            .path()
             .join("abc123hash")
             .join("chats")
             .join(format!("session-{}.json", session_id));
@@ -1129,9 +1137,7 @@ mod tests {
                         output: Some("fn main() {}".to_string()),
                         status: ToolStatus::Success,
                     }],
-                    metadata: HashMap::from([
-                        ("model".to_string(), json!("gemini-2.5-pro")),
-                    ]),
+                    metadata: HashMap::from([("model".to_string(), json!("gemini-2.5-pro"))]),
                 },
                 Message {
                     id: Uuid::new_v4(),
@@ -1157,7 +1163,9 @@ mod tests {
         assert_eq!(read_conv.messages.len(), 3);
 
         // Check user messages
-        let user_msgs: Vec<&Message> = read_conv.messages.iter()
+        let user_msgs: Vec<&Message> = read_conv
+            .messages
+            .iter()
             .filter(|m| m.role == Role::User)
             .collect();
         assert_eq!(user_msgs.len(), 2);
@@ -1165,7 +1173,9 @@ mod tests {
         assert_eq!(user_msgs[1].content, "Thanks!");
 
         // Check assistant message
-        let assistant_msgs: Vec<&Message> = read_conv.messages.iter()
+        let assistant_msgs: Vec<&Message> = read_conv
+            .messages
+            .iter()
             .filter(|m| m.role == Role::Assistant)
             .collect();
         assert_eq!(assistant_msgs.len(), 1);
@@ -1173,7 +1183,10 @@ mod tests {
         assert_eq!(assistant_msgs[0].tool_calls.len(), 1);
         assert_eq!(assistant_msgs[0].tool_calls[0].name, "readFile");
         assert_eq!(assistant_msgs[0].tool_calls[0].status, ToolStatus::Success);
-        assert_eq!(assistant_msgs[0].tool_calls[0].output.as_deref(), Some("fn main() {}"));
+        assert_eq!(
+            assistant_msgs[0].tool_calls[0].output.as_deref(),
+            Some("fn main() {}")
+        );
         assert_eq!(assistant_msgs[0].metadata["model"], json!("gemini-2.5-pro"));
     }
 
@@ -1220,7 +1233,9 @@ mod tests {
         let session_id = adapter.write_conversation(&conv).unwrap();
         let read_conv = adapter.read_conversation(&session_id).unwrap();
 
-        let assistant = read_conv.messages.iter()
+        let assistant = read_conv
+            .messages
+            .iter()
             .find(|m| m.role == Role::Assistant)
             .unwrap();
         let thoughts = assistant.metadata.get("thoughts").unwrap();
@@ -1285,21 +1300,19 @@ mod tests {
             created_at: now,
             updated_at: now,
             summary: None,
-            messages: vec![
-                Message {
-                    id: Uuid::new_v4(),
-                    timestamp: now,
-                    role: Role::Assistant,
-                    content: "".to_string(),
-                    tool_calls: vec![ToolCall {
-                        name: "readFile".to_string(),
-                        input: json!({"path": "/missing"}),
-                        output: Some("file not found".to_string()),
-                        status: ToolStatus::Error,
-                    }],
-                    metadata: HashMap::new(),
-                },
-            ],
+            messages: vec![Message {
+                id: Uuid::new_v4(),
+                timestamp: now,
+                role: Role::Assistant,
+                content: "".to_string(),
+                tool_calls: vec![ToolCall {
+                    name: "readFile".to_string(),
+                    input: json!({"path": "/missing"}),
+                    output: Some("file not found".to_string()),
+                    status: ToolStatus::Error,
+                }],
+                metadata: HashMap::new(),
+            }],
             file_changes: Vec::new(),
         };
 
@@ -1308,7 +1321,10 @@ mod tests {
 
         let assistant = &read_conv.messages[0];
         assert_eq!(assistant.tool_calls[0].status, ToolStatus::Error);
-        assert_eq!(assistant.tool_calls[0].output.as_deref(), Some("file not found"));
+        assert_eq!(
+            assistant.tool_calls[0].output.as_deref(),
+            Some("file not found")
+        );
     }
 
     #[test]
@@ -1324,16 +1340,14 @@ mod tests {
             created_at: now,
             updated_at: now,
             summary: None,
-            messages: vec![
-                Message {
-                    id: Uuid::new_v4(),
-                    timestamp: now,
-                    role: Role::User,
-                    content: "Hello".to_string(),
-                    tool_calls: Vec::new(),
-                    metadata: HashMap::new(),
-                },
-            ],
+            messages: vec![Message {
+                id: Uuid::new_v4(),
+                timestamp: now,
+                role: Role::User,
+                content: "Hello".to_string(),
+                tool_calls: Vec::new(),
+                metadata: HashMap::new(),
+            }],
             file_changes: Vec::new(),
         };
 

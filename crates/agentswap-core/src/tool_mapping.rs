@@ -134,11 +134,16 @@ fn remap_input(
     match canonical {
         Canonical::Shell => {
             // Claude: {command}, Gemini: {command}, Codex: {cmd}
-            rename_field(&mut result, source, target, &[
-                (AgentKind::Claude, "command"),
-                (AgentKind::Gemini, "command"),
-                (AgentKind::Codex, "cmd"),
-            ]);
+            rename_field(
+                &mut result,
+                source,
+                target,
+                &[
+                    (AgentKind::Claude, "command"),
+                    (AgentKind::Gemini, "command"),
+                    (AgentKind::Codex, "cmd"),
+                ],
+            );
         }
         Canonical::ReadFile | Canonical::WriteFile | Canonical::EditFile => {
             // Claude: {file_path}, Gemini: {file_path}
@@ -147,27 +152,42 @@ fn remap_input(
         }
         Canonical::Grep => {
             // Claude: {path, pattern}, Gemini: {file_path, pattern}
-            rename_field(&mut result, source, target, &[
-                (AgentKind::Claude, "path"),
-                (AgentKind::Gemini, "file_path"),
-                (AgentKind::Codex, "path"),
-            ]);
+            rename_field(
+                &mut result,
+                source,
+                target,
+                &[
+                    (AgentKind::Claude, "path"),
+                    (AgentKind::Gemini, "file_path"),
+                    (AgentKind::Codex, "path"),
+                ],
+            );
         }
         Canonical::Glob => {
             // Claude: {path, pattern}, Gemini: {dir_path, pattern}
-            rename_field(&mut result, source, target, &[
-                (AgentKind::Claude, "path"),
-                (AgentKind::Gemini, "dir_path"),
-                (AgentKind::Codex, "path"),
-            ]);
+            rename_field(
+                &mut result,
+                source,
+                target,
+                &[
+                    (AgentKind::Claude, "path"),
+                    (AgentKind::Gemini, "dir_path"),
+                    (AgentKind::Codex, "path"),
+                ],
+            );
         }
         Canonical::ListDir => {
             // Gemini: {dir_path}, Claude doesn't have this (maps to Glob)
-            rename_field(&mut result, source, target, &[
-                (AgentKind::Claude, "path"),
-                (AgentKind::Gemini, "dir_path"),
-                (AgentKind::Codex, "path"),
-            ]);
+            rename_field(
+                &mut result,
+                source,
+                target,
+                &[
+                    (AgentKind::Claude, "path"),
+                    (AgentKind::Gemini, "dir_path"),
+                    (AgentKind::Codex, "path"),
+                ],
+            );
         }
         _ => {}
     }
@@ -218,7 +238,12 @@ mod tests {
     #[test]
     fn test_gemini_shell_to_claude() {
         let input = json!({"command": "cargo build"});
-        let mapped = map_tool(&AgentKind::Gemini, &AgentKind::Claude, "run_shell_command", &input);
+        let mapped = map_tool(
+            &AgentKind::Gemini,
+            &AgentKind::Claude,
+            "run_shell_command",
+            &input,
+        );
         assert_eq!(mapped.name, "Bash");
         assert_eq!(mapped.input, json!({"command": "cargo build"}));
     }
@@ -246,13 +271,21 @@ mod tests {
         let input = json!({"pattern": "TODO", "path": "/src"});
         let mapped = map_tool(&AgentKind::Claude, &AgentKind::Gemini, "Grep", &input);
         assert_eq!(mapped.name, "grep_search");
-        assert_eq!(mapped.input, json!({"pattern": "TODO", "file_path": "/src"}));
+        assert_eq!(
+            mapped.input,
+            json!({"pattern": "TODO", "file_path": "/src"})
+        );
     }
 
     #[test]
     fn test_gemini_grep_to_claude() {
         let input = json!({"pattern": "TODO", "file_path": "/src"});
-        let mapped = map_tool(&AgentKind::Gemini, &AgentKind::Claude, "grep_search", &input);
+        let mapped = map_tool(
+            &AgentKind::Gemini,
+            &AgentKind::Claude,
+            "grep_search",
+            &input,
+        );
         assert_eq!(mapped.name, "Grep");
         assert_eq!(mapped.input, json!({"pattern": "TODO", "path": "/src"}));
     }
@@ -292,7 +325,12 @@ mod tests {
     #[test]
     fn test_codex_to_gemini() {
         let input = json!({"cmd": "make build"});
-        let mapped = map_tool(&AgentKind::Codex, &AgentKind::Gemini, "exec_command", &input);
+        let mapped = map_tool(
+            &AgentKind::Codex,
+            &AgentKind::Gemini,
+            "exec_command",
+            &input,
+        );
         assert_eq!(mapped.name, "run_shell_command");
         assert_eq!(mapped.input, json!({"command": "make build"}));
     }
@@ -300,7 +338,12 @@ mod tests {
     #[test]
     fn test_codex_to_claude() {
         let input = json!({"cmd": "cargo test"});
-        let mapped = map_tool(&AgentKind::Codex, &AgentKind::Claude, "exec_command", &input);
+        let mapped = map_tool(
+            &AgentKind::Codex,
+            &AgentKind::Claude,
+            "exec_command",
+            &input,
+        );
         assert_eq!(mapped.name, "Bash");
         assert_eq!(mapped.input, json!({"command": "cargo test"}));
     }

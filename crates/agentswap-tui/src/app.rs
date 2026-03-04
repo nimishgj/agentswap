@@ -174,11 +174,7 @@ impl App {
         self.conversations
             .iter()
             .filter(|c| {
-                let title = c
-                    .summary
-                    .as_deref()
-                    .unwrap_or(&c.id)
-                    .to_lowercase();
+                let title = c.summary.as_deref().unwrap_or(&c.id).to_lowercase();
                 title.contains(&query)
                     || c.id.to_lowercase().contains(&query)
                     || c.project_dir.to_lowercase().contains(&query)

@@ -211,10 +211,7 @@ mod tests {
         let session = parse_session(&data).unwrap();
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].message_type, "user");
-        assert_eq!(
-            session.messages[0].content.as_deref(),
-            Some("Hello Gemini")
-        );
+        assert_eq!(session.messages[0].content.as_deref(), Some("Hello Gemini"));
     }
 
     #[test]
@@ -383,10 +380,7 @@ mod tests {
             description: None,
             result_display: None,
         };
-        assert_eq!(
-            extract_tool_output(&tc),
-            Some("fn main() {}".to_string())
-        );
+        assert_eq!(extract_tool_output(&tc), Some("fn main() {}".to_string()));
     }
 
     #[test]
@@ -408,10 +402,7 @@ mod tests {
             description: None,
             result_display: None,
         };
-        assert_eq!(
-            extract_tool_output(&tc),
-            Some("file not found".to_string())
-        );
+        assert_eq!(extract_tool_output(&tc), Some("file not found".to_string()));
     }
 
     #[test]

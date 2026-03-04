@@ -44,9 +44,7 @@ pub enum ClaudeContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "thinking")]
-    Thinking {
-        thinking: String,
-    },
+    Thinking { thinking: String },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -85,10 +83,9 @@ pub fn decode_project_path(encoded: &str) -> String {
     if encoded.is_empty() {
         return String::new();
     }
-    // Replace leading dash and all dashes with path separators
-    let path = encoded.replace('-', "/");
-    // The encoded string starts with `-` which becomes `/`
-    path
+    // Replace leading dash and all dashes with path separators.
+    // The encoded string starts with `-` which becomes `/`.
+    encoded.replace('-', "/")
 }
 
 #[cfg(test)]
@@ -101,10 +98,7 @@ mod tests {
             decode_project_path("-Users-nimishgj-github"),
             "/Users/nimishgj/github"
         );
-        assert_eq!(
-            decode_project_path("-private-tmp"),
-            "/private/tmp"
-        );
+        assert_eq!(decode_project_path("-private-tmp"), "/private/tmp");
         assert_eq!(decode_project_path(""), "");
     }
 

@@ -21,6 +21,12 @@ pub struct ClaudeAdapter {
     projects_dir: PathBuf,
 }
 
+impl Default for ClaudeAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClaudeAdapter {
     /// Create a new ClaudeAdapter using the default `~/.claude/projects` directory.
     pub fn new() -> Self {
@@ -456,10 +462,7 @@ impl AgentAdapter for ClaudeAdapter {
                                             .and_then(|u| Uuid::parse_str(u).ok())
                                             .unwrap_or_else(Uuid::new_v4);
                                         let mut metadata = HashMap::new();
-                                        metadata.insert(
-                                            "thinking".to_string(),
-                                            json!([thinking]),
-                                        );
+                                        metadata.insert("thinking".to_string(), json!([thinking]));
                                         messages.push(Message {
                                             id: msg_id,
                                             timestamp: ts,
@@ -577,8 +580,12 @@ impl AgentAdapter for ClaudeAdapter {
         // Determine the project subdirectory using path encoding
         let encoded_project = encode_project_path(&conv.project_dir);
         let project_dir = self.projects_dir.join(&encoded_project);
-        fs::create_dir_all(&project_dir)
-            .with_context(|| format!("Failed to create project directory: {}", project_dir.display()))?;
+        fs::create_dir_all(&project_dir).with_context(|| {
+            format!(
+                "Failed to create project directory: {}",
+                project_dir.display()
+            )
+        })?;
 
         let file_path = project_dir.join(format!("{}.jsonl", session_id));
         let mut file = fs::File::create(&file_path)
@@ -612,7 +619,9 @@ impl AgentAdapter for ClaudeAdapter {
 
         // Emit message events with parentUuid chaining
         for msg in &conv.messages {
-            let ts = msg.timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let ts = msg
+                .timestamp
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             let event_uuid = Uuid::new_v4().to_string();
 
             match msg.role {
@@ -629,7 +638,10 @@ impl AgentAdapter for ClaudeAdapter {
                         }
                     });
                     if let Some(parent) = &prev_uuid {
-                        event.as_object_mut().unwrap().insert("parentUuid".to_string(), json!(parent));
+                        event
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("parentUuid".to_string(), json!(parent));
                     }
                     writeln!(file, "{}", serde_json::to_string(&event)?)?;
                     prev_uuid = Some(event_uuid);
@@ -665,8 +677,10 @@ impl AgentAdapter for ClaudeAdapter {
                     // Add tool_use blocks (with tool name mapping)
                     let mut tool_result_events: Vec<(String, Value)> = Vec::new();
                     for tc in &msg.tool_calls {
-                        let mapped = map_tool(&conv.source_agent, &AgentKind::Claude, &tc.name, &tc.input);
-                        let tool_use_id = format!("toolu_{}", Uuid::new_v4().to_string().replace('-', ""));
+                        let mapped =
+                            map_tool(&conv.source_agent, &AgentKind::Claude, &tc.name, &tc.input);
+                        let tool_use_id =
+                            format!("toolu_{}", Uuid::new_v4().to_string().replace('-', ""));
                         content_blocks.push(json!({
                             "type": "tool_use",
                             "id": tool_use_id,
@@ -677,21 +691,24 @@ impl AgentAdapter for ClaudeAdapter {
                         // Prepare corresponding tool_result event (emitted as a user event)
                         let result_uuid = Uuid::new_v4().to_string();
                         let result_content = tc.output.as_deref().unwrap_or("");
-                        tool_result_events.push((result_uuid.clone(), json!({
-                            "type": "user",
-                            "uuid": result_uuid,
-                            "timestamp": ts,
-                            "sessionId": session_id,
-                            "isSidechain": false,
-                            "message": {
-                                "role": "user",
-                                "content": [{
-                                    "type": "tool_result",
-                                    "tool_use_id": tool_use_id,
-                                    "content": result_content
-                                }]
-                            }
-                        })));
+                        tool_result_events.push((
+                            result_uuid.clone(),
+                            json!({
+                                "type": "user",
+                                "uuid": result_uuid,
+                                "timestamp": ts,
+                                "sessionId": session_id,
+                                "isSidechain": false,
+                                "message": {
+                                    "role": "user",
+                                    "content": [{
+                                        "type": "tool_result",
+                                        "tool_use_id": tool_use_id,
+                                        "content": result_content
+                                    }]
+                                }
+                            }),
+                        ));
                     }
 
                     // If no content blocks at all, add an empty text block
@@ -716,7 +733,10 @@ impl AgentAdapter for ClaudeAdapter {
                         }
                     });
                     if let Some(parent) = &prev_uuid {
-                        assistant_event.as_object_mut().unwrap().insert("parentUuid".to_string(), json!(parent));
+                        assistant_event
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("parentUuid".to_string(), json!(parent));
                     }
                     writeln!(file, "{}", serde_json::to_string(&assistant_event)?)?;
                     prev_uuid = Some(event_uuid);
@@ -724,7 +744,10 @@ impl AgentAdapter for ClaudeAdapter {
                     // Emit tool_result events after the assistant event, chaining parentUuid
                     for (result_uuid, mut result_event) in tool_result_events {
                         if let Some(parent) = &prev_uuid {
-                            result_event.as_object_mut().unwrap().insert("parentUuid".to_string(), json!(parent));
+                            result_event
+                                .as_object_mut()
+                                .unwrap()
+                                .insert("parentUuid".to_string(), json!(parent));
                         }
                         writeln!(file, "{}", serde_json::to_string(&result_event)?)?;
                         prev_uuid = Some(result_uuid);
@@ -753,9 +776,7 @@ impl AgentAdapter for ClaudeAdapter {
         // Header
         output.push_str(&format!(
             "# Conversation: {}\n\n",
-            conv.summary
-                .as_deref()
-                .unwrap_or(&conv.id)
+            conv.summary.as_deref().unwrap_or(&conv.id)
         ));
         output.push_str(&format!("**Source:** {}\n", conv.source_agent_name()));
         output.push_str(&format!("**Project:** {}\n", conv.project_dir));
@@ -1114,7 +1135,10 @@ mod tests {
 
         // Verify the file was created
         let encoded = encode_project_path("/tmp/project");
-        let session_file = tmp.path().join(&encoded).join(format!("{}.jsonl", session_id));
+        let session_file = tmp
+            .path()
+            .join(&encoded)
+            .join(format!("{}.jsonl", session_id));
         assert!(session_file.exists());
     }
 
@@ -1180,10 +1204,14 @@ mod tests {
         // After writing, user and assistant messages should round-trip
         // Note: tool results emit extra "user" events in Claude format, so
         // the read back may contain more events. Focus on text messages.
-        let user_msgs: Vec<&Message> = read_conv.messages.iter()
+        let user_msgs: Vec<&Message> = read_conv
+            .messages
+            .iter()
             .filter(|m| m.role == Role::User && !m.content.is_empty())
             .collect();
-        let assistant_msgs: Vec<&Message> = read_conv.messages.iter()
+        let assistant_msgs: Vec<&Message> = read_conv
+            .messages
+            .iter()
             .filter(|m| m.role == Role::Assistant)
             .collect();
 
@@ -1203,7 +1231,10 @@ mod tests {
         let now = Utc::now();
 
         let mut metadata = HashMap::new();
-        metadata.insert("thinking".to_string(), serde_json::json!(["Let me think..."]));
+        metadata.insert(
+            "thinking".to_string(),
+            serde_json::json!(["Let me think..."]),
+        );
 
         let conv = Conversation {
             id: "think-test".to_string(),
@@ -1236,7 +1267,9 @@ mod tests {
         let session_id = adapter.write_conversation(&conv).unwrap();
         let read_conv = adapter.read_conversation(&session_id).unwrap();
 
-        let assistant = read_conv.messages.iter()
+        let assistant = read_conv
+            .messages
+            .iter()
             .find(|m| m.role == Role::Assistant)
             .unwrap();
         assert_eq!(assistant.content, "Answer");
@@ -1371,7 +1404,10 @@ mod tests {
 
         let session_id = adapter.write_conversation(&conv).unwrap();
         let encoded = encode_project_path("/tmp/snap");
-        let session_file = tmp.path().join(&encoded).join(format!("{}.jsonl", session_id));
+        let session_file = tmp
+            .path()
+            .join(&encoded)
+            .join(format!("{}.jsonl", session_id));
         let content = fs::read_to_string(&session_file).unwrap();
         let first_line = content.lines().next().unwrap();
         let first_event: Value = serde_json::from_str(first_line).unwrap();
@@ -1429,7 +1465,10 @@ mod tests {
 
         let session_id = adapter.write_conversation(&conv).unwrap();
         let encoded = encode_project_path("/tmp/chain");
-        let session_file = tmp.path().join(&encoded).join(format!("{}.jsonl", session_id));
+        let session_file = tmp
+            .path()
+            .join(&encoded)
+            .join(format!("{}.jsonl", session_id));
         let content = fs::read_to_string(&session_file).unwrap();
         let events: Vec<Value> = content
             .lines()
