@@ -51,6 +51,12 @@ pub struct App {
     pub searching: bool,
     /// The resume command to show after a successful transfer.
     pub resume_command: Option<String>,
+    /// Whether the conversation preview panel is open.
+    pub preview_open: bool,
+    /// The rendered text of the previewed conversation.
+    pub preview_text: String,
+    /// Scroll offset for the preview panel.
+    pub preview_scroll: u16,
 }
 
 impl App {
@@ -69,6 +75,9 @@ impl App {
             search_query: String::new(),
             searching: false,
             resume_command: None,
+            preview_open: false,
+            preview_text: String::new(),
+            preview_scroll: 0,
         }
     }
 

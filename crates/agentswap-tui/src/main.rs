@@ -80,6 +80,21 @@ fn run_event_loop(
                 app.should_quit = true;
             }
 
+            // Preview scroll: Ctrl+D / Ctrl+U
+            if app.preview_open && app.screen == Screen::ConversationList {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    match key.code {
+                        KeyCode::Char('d') => {
+                            app.preview_scroll = app.preview_scroll.saturating_add(10);
+                        }
+                        KeyCode::Char('u') => {
+                            app.preview_scroll = app.preview_scroll.saturating_sub(10);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
             // If in search mode, handle search-specific keys first.
             if app.searching {
                 match key.code {
@@ -117,9 +132,15 @@ fn run_event_loop(
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
                         app.move_down();
+                        if app.preview_open && app.screen == Screen::ConversationList {
+                            load_preview(app, adapters);
+                        }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         app.move_up();
+                        if app.preview_open && app.screen == Screen::ConversationList {
+                            load_preview(app, adapters);
+                        }
                     }
                     KeyCode::Enter => {
                         handle_enter(app, adapters, terminal);
@@ -134,7 +155,15 @@ fn run_event_loop(
                         }
                     }
                     KeyCode::Tab => {
-                        if app.screen == Screen::Transfer {
+                        if app.screen == Screen::ConversationList {
+                            if app.preview_open {
+                                app.preview_open = false;
+                                app.preview_text.clear();
+                            } else {
+                                app.preview_open = true;
+                                load_preview(app, adapters);
+                            }
+                        } else if app.screen == Screen::Transfer {
                             app.toggle_transfer_method();
                         }
                     }
@@ -332,11 +361,16 @@ fn handle_esc(app: &mut App) {
             // Nothing to go back to; could quit, but spec says q/Ctrl+C for that.
         }
         Screen::ConversationList => {
-            app.screen = Screen::AgentOverview;
-            app.conversations.clear();
-            app.search_query.clear();
-            app.searching = false;
-            app.status_message = None;
+            if app.preview_open {
+                app.preview_open = false;
+                app.preview_text.clear();
+            } else {
+                app.screen = Screen::AgentOverview;
+                app.conversations.clear();
+                app.search_query.clear();
+                app.searching = false;
+                app.status_message = None;
+            }
         }
         Screen::Transfer => {
             app.screen = Screen::ConversationList;
@@ -346,6 +380,29 @@ fn handle_esc(app: &mut App) {
             app.screen = Screen::AgentOverview;
             app.resume_command = None;
             app.status_message = None;
+        }
+    }
+}
+
+/// Load the preview text for the currently selected conversation.
+fn load_preview(app: &mut App, adapters: &[Box<dyn AgentAdapter>]) {
+    app.preview_scroll = 0;
+    let filtered = app.filtered_conversations();
+    let conv_id = match filtered.get(app.selected_conv_idx) {
+        Some(c) => c.id.clone(),
+        None => {
+            app.preview_text = "(no conversation selected)".to_string();
+            return;
+        }
+    };
+    let source_idx = app.selected_agent_idx;
+    match adapters[source_idx].read_conversation(&conv_id) {
+        Ok(conv) => match adapters[source_idx].render_prompt(&conv) {
+            Ok(text) => app.preview_text = text,
+            Err(e) => app.preview_text = format!("Error rendering: {}", e),
+        },
+        Err(e) => {
+            app.preview_text = format!("Error loading: {}", e);
         }
     }
 }

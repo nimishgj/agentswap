@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 
@@ -130,6 +130,17 @@ fn draw_conversation_list(f: &mut Frame, app: &App) {
         f.render_widget(search_bar, chunks[0]);
     }
 
+    // Split main area horizontally if preview is open.
+    let (list_area, preview_area) = if app.preview_open {
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(chunks[1]);
+        (panes[0], Some(panes[1]))
+    } else {
+        (chunks[1], None)
+    };
+
     // Build conversation list items.
     let filtered = app.filtered_conversations();
     let items: Vec<ListItem> = filtered
@@ -184,9 +195,45 @@ fn draw_conversation_list(f: &mut Frame, app: &App) {
     if !filtered.is_empty() {
         state.select(Some(app.selected_conv_idx.min(filtered.len().saturating_sub(1))));
     }
-    f.render_stateful_widget(list, chunks[1], &mut state);
+    f.render_stateful_widget(list, list_area, &mut state);
 
-    draw_footer(f, chunks[2], app, "[Enter] Select  [/] Search  [Esc] Back");
+    // Preview panel
+    if let Some(preview_rect) = preview_area {
+        let preview_lines: Vec<Line> = app
+            .preview_text
+            .lines()
+            .map(|line| {
+                let style = if line.starts_with("## User") || line.starts_with("## Assistant") {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else if line.starts_with("**") {
+                    Style::default().fg(Color::Cyan)
+                } else if line.starts_with("---") {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(Span::styled(line.to_string(), style))
+            })
+            .collect();
+
+        let preview = Paragraph::new(preview_lines)
+            .block(
+                Block::default()
+                    .title(" Preview ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .wrap(Wrap { trim: false })
+            .scroll((app.preview_scroll, 0));
+        f.render_widget(preview, preview_rect);
+    }
+
+    let footer_hint = if app.preview_open {
+        "[Enter] Select  [/] Search  [Tab] Close preview  [Ctrl+D/U] Scroll  [Esc] Back"
+    } else {
+        "[Enter] Select  [/] Search  [Tab] Preview  [Esc] Back"
+    };
+    draw_footer(f, chunks[2], app, footer_hint);
 }
 
 // ---------------------------------------------------------------------------
