@@ -46,14 +46,14 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p agentswap-tui
+        run: cargo build --release --target ${{ matrix.target }} -p agentswap
 
       - name: Package
         shell: bash
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
           ARCHIVE="agentswap-${VERSION}-${{ matrix.target }}.tar.gz"
-          tar -czf "$ARCHIVE" -C "target/${{ matrix.target }}/release" agentswap-tui
+          tar -czf "$ARCHIVE" -C "target/${{ matrix.target }}/release" agentswap
           shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
@@ -138,7 +138,7 @@ jobs:
             end
 
             def install
-              bin.install "agentswap-tui" => "agentswap"
+              bin.install "agentswap" => "agentswap"
             end
 
             test do
