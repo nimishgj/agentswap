@@ -149,7 +149,7 @@ jobs:
           )
 
           # Clone tap repo and update formula
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/base-14/tap.git" /tmp/tap
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/base-14/homebrew-tap.git" /tmp/tap
           mkdir -p /tmp/tap/Formula
           echo "$FORMULA" > /tmp/tap/Formula/agentswap.rb
           cd /tmp/tap
