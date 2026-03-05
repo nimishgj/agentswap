@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p agentswap-tui
+
+      - name: Package
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          ARCHIVE="agentswap-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "target/${{ matrix.target }}/release" agentswap-tui
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            agentswap-*.tar.gz
+            agentswap-*.tar.gz.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/agentswap-*.tar.gz
+            artifacts/agentswap-*.tar.gz.sha256
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          DARWIN_AMD64_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/agentswap-${VERSION}-x86_64-apple-darwin.tar.gz"
+          DARWIN_ARM64_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/agentswap-${VERSION}-aarch64-apple-darwin.tar.gz"
+          LINUX_AMD64_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/agentswap-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          LINUX_ARM64_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/agentswap-${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
+
+          # Download and get checksums
+          curl -sL "${DARWIN_AMD64_URL}.sha256" -o /tmp/darwin_amd64.sha256
+          curl -sL "${DARWIN_ARM64_URL}.sha256" -o /tmp/darwin_arm64.sha256
+          curl -sL "${LINUX_AMD64_URL}.sha256" -o /tmp/linux_amd64.sha256
+          curl -sL "${LINUX_ARM64_URL}.sha256" -o /tmp/linux_arm64.sha256
+
+          DARWIN_AMD64_SHA=$(awk '{print $1}' /tmp/darwin_amd64.sha256)
+          DARWIN_ARM64_SHA=$(awk '{print $1}' /tmp/darwin_arm64.sha256)
+          LINUX_AMD64_SHA=$(awk '{print $1}' /tmp/linux_amd64.sha256)
+          LINUX_ARM64_SHA=$(awk '{print $1}' /tmp/linux_arm64.sha256)
+
+          FORMULA=$(cat <<FORMULA_EOF
+          class Agentswap < Formula
+            desc "Transfer conversation history between AI coding agents"
+            homepage "https://github.com/nimishgj/agentswap"
+            license "MIT"
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${DARWIN_ARM64_URL}"
+                sha256 "${DARWIN_ARM64_SHA}"
+              else
+                url "${DARWIN_AMD64_URL}"
+                sha256 "${DARWIN_AMD64_SHA}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${LINUX_ARM64_URL}"
+                sha256 "${LINUX_ARM64_SHA}"
+              else
+                url "${LINUX_AMD64_URL}"
+                sha256 "${LINUX_AMD64_SHA}"
+              end
+            end
+
+            def install
+              bin.install "agentswap-tui" => "agentswap"
+            end
+
+            test do
+              assert_match "agentswap", shell_output("#{bin}/agentswap --version 2>&1", 1)
+            end
+          end
+          FORMULA_EOF
+          )
+
+          # Clone tap repo and update formula
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/base-14/tap.git" /tmp/tap
+          mkdir -p /tmp/tap/Formula
+          echo "$FORMULA" > /tmp/tap/Formula/agentswap.rb
+          cd /tmp/tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/agentswap.rb
+          git commit -m "agentswap ${VERSION}"
+          git push
