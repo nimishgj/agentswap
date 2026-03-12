@@ -18,24 +18,6 @@ pub struct AgentInfo {
     pub conversation_count: usize,
 }
 
-/// How to deliver a conversation to the target agent.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TransferMethod {
-    /// Write directly into the target agent's data directory.
-    Native,
-    /// Pipe the rendered prompt via stdin to the target agent's CLI.
-    StdinPipe,
-}
-
-impl std::fmt::Display for TransferMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TransferMethod::Native => write!(f, "Native (write to data dir)"),
-            TransferMethod::StdinPipe => write!(f, "Stdin pipe (launch CLI)"),
-        }
-    }
-}
-
 /// The full application state for the TUI.
 pub struct App {
     pub screen: Screen,
@@ -44,7 +26,6 @@ pub struct App {
     pub conversations: Vec<ConversationSummary>,
     pub selected_conv_idx: usize,
     pub target_agent_idx: usize,
-    pub transfer_method: TransferMethod,
     pub status_message: Option<String>,
     pub should_quit: bool,
     pub search_query: String,
@@ -71,7 +52,6 @@ impl App {
             conversations: Vec::new(),
             selected_conv_idx: 0,
             target_agent_idx: 0,
-            transfer_method: TransferMethod::Native,
             status_message: None,
             should_quit: false,
             search_query: String::new(),
@@ -190,13 +170,5 @@ impl App {
             .filter(|(i, a)| *i != self.selected_agent_idx && a.available)
             .map(|(i, _)| i)
             .collect()
-    }
-
-    /// Toggle between Native and StdinPipe transfer methods.
-    pub fn toggle_transfer_method(&mut self) {
-        self.transfer_method = match self.transfer_method {
-            TransferMethod::Native => TransferMethod::StdinPipe,
-            TransferMethod::StdinPipe => TransferMethod::Native,
-        };
     }
 }

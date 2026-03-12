@@ -71,19 +71,37 @@ impl CodexAdapter {
             )
         })?;
 
-        // Ensure the threads table exists
+        // Ensure the threads table exists (matches Codex CLI state_5.sqlite schema)
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS threads (
                 id TEXT PRIMARY KEY,
                 rollout_path TEXT NOT NULL,
-                cwd TEXT NOT NULL,
-                title TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                model_provider TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                title TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL,
+                approval_mode TEXT NOT NULL,
                 tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0,
+                archived_at INTEGER,
+                git_sha TEXT,
                 git_branch TEXT,
-                first_user_message TEXT NOT NULL DEFAULT ''
-            );",
+                git_origin_url TEXT,
+                cli_version TEXT NOT NULL DEFAULT '',
+                first_user_message TEXT NOT NULL DEFAULT '',
+                agent_nickname TEXT,
+                agent_role TEXT,
+                memory_mode TEXT NOT NULL DEFAULT 'enabled'
+            );
+            CREATE INDEX IF NOT EXISTS idx_threads_created_at ON threads(created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_threads_updated_at ON threads(updated_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_threads_archived ON threads(archived);
+            CREATE INDEX IF NOT EXISTS idx_threads_source ON threads(source);
+            CREATE INDEX IF NOT EXISTS idx_threads_provider ON threads(model_provider);",
         )?;
 
         Ok(conn)
@@ -546,7 +564,8 @@ impl AgentAdapter for CodexAdapter {
             )
         })?;
 
-        let rollout_filename = format!("rollout-{}.jsonl", thread_id);
+        let rollout_ts = now.format("%Y-%m-%dT%H-%M-%S").to_string();
+        let rollout_filename = format!("rollout-{}-{}.jsonl", rollout_ts, thread_id);
         let rollout_path = sessions_dir.join(&rollout_filename);
 
         let mut file = fs::File::create(&rollout_path).with_context(|| {
@@ -562,7 +581,12 @@ impl AgentAdapter for CodexAdapter {
             "type": "session_meta",
             "payload": {
                 "id": thread_id,
-                "cwd": conv.project_dir
+                "timestamp": session_meta_ts,
+                "cwd": conv.project_dir,
+                "originator": "agentswap",
+                "cli_version": "0.1.0",
+                "source": "cli",
+                "model_provider": "openai"
             }
         });
         writeln!(file, "{}", serde_json::to_string(&session_meta)?)?;
@@ -704,19 +728,33 @@ impl AgentAdapter for CodexAdapter {
 
         let conn = self.open_db_rw()?;
         conn.execute(
-            "INSERT INTO threads (id, rollout_path, cwd, title, created_at, updated_at, \
-             tokens_used, git_branch, first_user_message) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO threads (id, rollout_path, created_at, updated_at, \
+             source, model_provider, cwd, title, sandbox_policy, approval_mode, \
+             tokens_used, has_user_event, archived, git_branch, cli_version, \
+             first_user_message, memory_mode) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             rusqlite::params![
                 thread_id,
                 rollout_path_str,
-                conv.project_dir,
-                title,
                 created_at,
                 updated_at,
-                0i64,           // tokens_used
+                "cli",
+                "openai",
+                conv.project_dir,
+                title,
+                r#"{"type":"read-only"}"#,
+                "on-request",
+                0i64, // tokens_used
+                if first_user_message.is_empty() {
+                    0i64
+                } else {
+                    1i64
+                }, // has_user_event
+                0i64, // archived
                 None::<String>, // git_branch
+                "",   // cli_version
                 first_user_message,
+                "enabled", // memory_mode
             ],
         )?;
 

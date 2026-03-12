@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Screen, TransferMethod};
+use crate::app::{App, Screen};
 
 /// Main draw function: dispatches to the appropriate screen renderer.
 pub fn draw(f: &mut Frame, app: &App) {
@@ -324,9 +324,6 @@ fn draw_transfer(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(1),                           // "To:" label
             Constraint::Length(targets.len().max(1) as u16), // target list
-            Constraint::Length(1),                           // blank
-            Constraint::Length(1),                           // "Method:" label
-            Constraint::Length(2),                           // method options
             Constraint::Min(0),                              // filler
         ])
         .split(content_chunks[2]);
@@ -374,50 +371,7 @@ fn draw_transfer(f: &mut Frame, app: &App) {
         f.render_stateful_widget(target_list, lower_chunks[1], &mut target_state);
     }
 
-    // "Method:" label
-    let method_label = Paragraph::new(Line::from(Span::styled(
-        "  Method: [Tab to toggle]",
-        Style::default().fg(Color::Yellow),
-    )));
-    f.render_widget(method_label, lower_chunks[3]);
-
-    // Method options
-    let methods = [
-        ("Native (write to data dir)", TransferMethod::Native),
-        ("Stdin pipe (launch CLI)", TransferMethod::StdinPipe),
-    ];
-    let method_items: Vec<ListItem> = methods
-        .iter()
-        .map(|(label, _)| {
-            ListItem::new(Line::from(Span::styled(
-                format!("    {}", label),
-                Style::default().fg(Color::White),
-            )))
-        })
-        .collect();
-
-    let method_list = List::new(method_items)
-        .highlight_style(
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .bg(Color::DarkGray),
-        )
-        .highlight_symbol("  > ");
-
-    let mut method_state = ListState::default();
-    let method_idx = match app.transfer_method {
-        TransferMethod::Native => 0,
-        TransferMethod::StdinPipe => 1,
-    };
-    method_state.select(Some(method_idx));
-    f.render_stateful_widget(method_list, lower_chunks[4], &mut method_state);
-
-    draw_footer(
-        f,
-        chunks[1],
-        app,
-        "[Enter] Transfer  [Tab] Method  [Esc] Back",
-    );
+    draw_footer(f, chunks[1], app, "[Enter] Transfer  [Esc] Back");
 }
 
 // ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ use agentswap_core::adapter::AgentAdapter;
 use agentswap_core::types::AgentKind;
 use agentswap_gemini::GeminiAdapter;
 
-use app::{AgentInfo, App, Screen, TransferMethod};
+use app::{AgentInfo, App, Screen};
 
 fn main() -> Result<()> {
     // ---- Build adapters and gather agent info ----
@@ -135,7 +135,7 @@ fn run_event_loop(
                         }
                     }
                     KeyCode::Enter => {
-                        handle_enter(app, adapters, terminal);
+                        handle_enter(app, adapters);
                     }
                     KeyCode::Esc => {
                         handle_esc(app);
@@ -177,8 +177,6 @@ fn run_event_loop(
                                 app.preview_open = true;
                                 load_preview(app, adapters);
                             }
-                        } else if app.screen == Screen::Transfer {
-                            app.toggle_transfer_method();
                         }
                     }
                     _ => {}
@@ -193,11 +191,7 @@ fn run_event_loop(
 }
 
 /// Handle the Enter key depending on the current screen.
-fn handle_enter(
-    app: &mut App,
-    adapters: &[Box<dyn AgentAdapter>],
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-) {
+fn handle_enter(app: &mut App, adapters: &[Box<dyn AgentAdapter>]) {
     match app.screen {
         Screen::AgentOverview => {
             let idx = app.selected_agent_idx;
@@ -230,7 +224,6 @@ fn handle_enter(
             }
             // Advance to the Transfer screen.
             app.target_agent_idx = 0;
-            app.transfer_method = app::TransferMethod::Native;
             app.status_message = None;
             app.screen = Screen::Transfer;
         }
@@ -242,7 +235,6 @@ fn handle_enter(
             }
             let target_idx = app.target_agent_idx.min(targets.len().saturating_sub(1));
             let target_agent_idx = targets[target_idx];
-            let target_name = app.agents[target_agent_idx].name.clone();
             let target_kind = app.agents[target_agent_idx].kind.clone();
             let source_idx = app.selected_agent_idx;
 
@@ -270,40 +262,15 @@ fn handle_enter(
                 conversation.project_dir = cwd.to_string_lossy().to_string();
             }
 
-            match app.transfer_method {
-                TransferMethod::StdinPipe => {
-                    // Render the conversation as a prompt using the source adapter.
-                    let prompt = match adapters[source_idx].render_prompt(&conversation) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            app.status_message = Some(format!("Error rendering prompt: {}", e));
-                            return;
-                        }
-                    };
-
-                    match execute_stdin_transfer(&prompt, &target_kind, terminal) {
-                        Ok(()) => {
-                            app.status_message =
-                                Some(format!("Transfer complete — launched {}", target_name));
-                        }
-                        Err(e) => {
-                            app.status_message = Some(format!("Transfer failed: {}", e));
-                        }
-                    }
+            match adapters[target_agent_idx].write_conversation(&conversation) {
+                Ok(new_id) => {
+                    let resume_cmd = build_resume_command(&target_kind, &new_id);
+                    app.resume_command = Some(resume_cmd);
+                    app.status_message = None;
+                    app.screen = Screen::TransferResult;
                 }
-                TransferMethod::Native => {
-                    // Try native write via the target adapter.
-                    match adapters[target_agent_idx].write_conversation(&conversation) {
-                        Ok(new_id) => {
-                            let resume_cmd = build_resume_command(&target_kind, &new_id);
-                            app.resume_command = Some(resume_cmd);
-                            app.status_message = None;
-                            app.screen = Screen::TransferResult;
-                        }
-                        Err(e) => {
-                            app.status_message = Some(format!("Native transfer failed: {}", e));
-                        }
-                    }
+                Err(e) => {
+                    app.status_message = Some(format!("Transfer failed: {}", e));
                 }
             }
         }
@@ -314,48 +281,6 @@ fn handle_enter(
             app.status_message = None;
         }
     }
-}
-
-/// Temporarily leave the TUI, spawn the target agent's CLI with the prompt
-/// piped to stdin, wait for it to finish, then re-enter the TUI.
-fn execute_stdin_transfer(
-    prompt: &str,
-    target_kind: &AgentKind,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-) -> Result<()> {
-    // Restore terminal so the child process can use it.
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
-    let cmd_args: Vec<&str> = match target_kind {
-        AgentKind::Claude => vec!["claude", "-p", "--output-format", "text"],
-        AgentKind::Codex => vec!["codex", "exec"],
-        AgentKind::Gemini => vec!["gemini", "-p"],
-    };
-
-    let result = (|| -> Result<()> {
-        let mut child = Command::new(cmd_args[0])
-            .args(&cmd_args[1..])
-            .stdin(Stdio::piped())
-            .spawn()?;
-
-        if let Some(mut stdin_handle) = child.stdin.take() {
-            stdin_handle.write_all(prompt.as_bytes())?;
-            // Drop stdin to signal EOF to the child process.
-        }
-
-        child.wait()?;
-        Ok(())
-    })();
-
-    // Always re-enter TUI mode, even if the child process failed.
-    enable_raw_mode()?;
-    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    terminal.hide_cursor()?;
-    terminal.clear()?;
-
-    result
 }
 
 /// Handle the Esc key: go back one screen.
